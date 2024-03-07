@@ -1,3 +1,3 @@
 # disco-enzyme
 
-![disco-enzyme](disco-enzyme-dalle3.webp | =128x128)
+<img src="disco-enzyme-dalle3.webp" width=128px height=128px>
