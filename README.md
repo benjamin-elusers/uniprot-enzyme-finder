@@ -26,13 +26,33 @@ brew install pigz # macOS
 
 ## Usage
 
+### Step 0: Download Data
+
+Before running the pipeline, you need the UniProt XML datasets.
+
+#### Option A: Python Script (Recommended)
+This utility automatically detects the latest release, checks file sizes, and handles resumes.
+
+```Bash
+python -m utils.download_xml
+```
+Files will be downloaded to the data/ directory.
+
+#### Option B: Manual Download
+You can manually download the files from the [UniProt FTP Current Release](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/).
+
+[uniprot_sprot.xml.gz](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.xml.gz)
+[uniprot_trembl.xml.gz](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_trembl.xml.gz)
+[Release Notes (relnotes.txt)](https://www.google.com/search?q=https://ftp.uniprot.org/pub/databases/uniprot/current_release/relnotes.txt)
+
+
 ### Step 1: Extract Features (Run once per data update)
 
 This reads the raw XML files and saves the relevant data to uniprot_raw_features.jsonl.gz.
 Time estimate: ~2 hours for full Swiss-Prot + TrEMBL.
 
 ```bash
-python main_extract.py -i uniprot_sprot.xml.gz uniprot_trembl.xml.gz -o uniprot_raw_features.jsonl.gz
+python main_extract.py -i data/uniprot_sprot.xml.gz data/uniprot_trembl.xml.gz -o uniprot_raw_features.jsonl.gz
 ```
 
 ### Step 2: Classify Enzymes (Run frequently)
