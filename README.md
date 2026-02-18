@@ -30,7 +30,7 @@ brew install pigz # macOS
 
 Before running the pipeline, you need the UniProt XML datasets.
 
-#### Option A: Python Script (Recommended)
+##### *Option A: Python Script (Recommended)*
 This utility automatically detects the latest release, checks file sizes, and handles resumes.
 
 ```Bash
@@ -38,13 +38,12 @@ python -m utils.download_xml
 ```
 Files will be downloaded to the data/ directory.
 
-#### Option B: Manual Download
+##### *Option B: Manual Download*
 You can manually download the files from the [UniProt FTP Current Release](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/).
 
-[uniprot_sprot.xml.gz](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.xml.gz)
-[uniprot_trembl.xml.gz](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_trembl.xml.gz)
-[Release Notes (relnotes.txt)](https://www.google.com/search?q=https://ftp.uniprot.org/pub/databases/uniprot/current_release/relnotes.txt)
-
+* [uniprot_sprot.xml.gz](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.xml.gz)
+* [uniprot_trembl.xml.gz](https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_trembl.xml.gz)
+* [Release Notes (relnotes.txt)](https://www.google.com/search?q=https://ftp.uniprot.org/pub/databases/uniprot/current_release/relnotes.txt)
 
 ### Step 1: Extract Features (Run once per data update)
 
@@ -56,6 +55,7 @@ python main_extract.py -i data/uniprot_sprot.xml.gz data/uniprot_trembl.xml.gz -
 ```
 
 ### Step 2: Classify Enzymes (Run frequently)
+
 This applies your classification logic (Active Sites, Pseudo-enzymes, Confidence scores).
 Time estimate: ~5-10 minutes.
 
