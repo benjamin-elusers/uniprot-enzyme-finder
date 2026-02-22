@@ -1,81 +1,87 @@
 # core/classifier.py
+
 import re
 from config.keywords import FUNCTIONAL_CATEGORIES, EC_CLASSES
+from config.patterns import ENZYME_NAME_ENDINGS
 
 class EnzymeClassifier:
-    def __init__(self):
+    def __init__(self, valid_catalytic_go_ids=None):
+        self.valid_catalytic_go_ids = valid_catalytic_go_ids or set()
+        
         # Flatten Context Map for O(1) lookups
         self.context_kw_map = {}
         for category, kws in FUNCTIONAL_CATEGORIES.items():
             for kw in kws:
                 self.context_kw_map[kw] = category
 
-    def determine_enzyme_type(self, features):
+    def classify_entry(self, entry_data, features):
         """
-        Central logic to determine if an entry is an Active Enzyme, 
-        a Pseudo-Enzyme, or a Non-Enzyme Context match.
-        
-        Args:
-            features (dict): Dictionary containing boolean flags and lists 
-                             (e.g., has_ec, is_inactive, ft_act_site, etc.)
+        Main decision tree. Returns the primary category and a dictionary 
+        of exact boolean flags for plotting downstream.
         """
-        # Unpack features for readability
+        # Unpack evidence tiers
         is_inactive_text = features.get('is_inactive_text', False)
-        has_ec = features.get('has_ec', False)
-        has_catalytic_kw = features.get('has_catalytic_kw', False)
-        has_catalytic_go = features.get('has_catalytic_go', False)
-        has_kinetics = features.get('has_kinetics', False)
-        has_active_site = features.get('has_active_site', False) # New Feature
-        has_binding_site = features.get('has_binding_site', False) # New Feature
-        has_text_mining = features.get('has_text_mining', False)
-        has_context_clue = features.get('has_context_clue', False)
+        caution_text = entry_data['text'].get('caution', '').lower()
+        if "inactive" in caution_text or "catalytically dead" in caution_text:
+            is_inactive_text = True
+            
+        # TIER 1: High Probability (Obvious)
+        has_ec = bool(entry_data['lists'].get('ec_numbers'))
+        has_catalytic_activity = features.get('has_reaction', False)
+        has_enzyme_dbs = bool(entry_data['lists'].get('enzyme_dbs'))
+        has_rhea = bool(entry_data['lists'].get('rhea_ids'))
         
-        # Strong indicators of "Enzymatic Nature" (Active or Inactive)
-        is_structurally_enzyme = (
-            has_ec or has_catalytic_kw or has_catalytic_go or 
-            has_kinetics or has_active_site
-        )
+        # Check GO Catalytic descendants
+        go_ids = entry_data['lists'].get('go_ids', [])
+        has_catalytic_go = any(go in self.valid_catalytic_go_ids for go in go_ids) if self.valid_catalytic_go_ids else False
+        
+        high_prob = any([has_ec, has_catalytic_activity, has_enzyme_dbs, has_rhea, has_catalytic_go])
 
-        # --- LOGIC BRANCH 1: INACTIVE HANDLING ---
+        # TIER 2: Medium Probability (Clues)
+        has_active_site = features.get('has_active_site', False)
+        has_catalytic_kw = features.get('has_catalytic_kw', False)
+        has_biosynth_text = features.get('has_biosynth_text', False)
+        
+        protein_name = entry_data['text'].get('protein_name', '')
+        has_enzyme_name = bool(ENZYME_NAME_ENDINGS.search(protein_name))
+        
+        med_prob = any([has_active_site, has_catalytic_kw, has_biosynth_text, has_enzyme_name])
+
+        # TIER 3: Low Probability / Context (Binding, pathways, etc. - mostly tracked for context)
+        has_binding_site = features.get('has_binding_site', False)
+
+        # --- DECISION TREE ---
+        primary_class = "Non_Enzyme"
+        
         if is_inactive_text:
-            # It says "Inactive", but is it a Pseudo-Enzyme or just irrelevant?
-            # A Pseudo-Enzyme usually retains the fold (Active Site / Binding Site) 
-            # or has a specific inactive EC (n.n.n.n).
-            if is_structurally_enzyme or has_binding_site:
-                return "Pseudo_Enzyme"
+            # If it has enzyme structure/clues but is flagged inactive -> Pseudo
+            if high_prob or med_prob or has_binding_site:
+                primary_class = "Pseudo_Enzyme"
             else:
-                return "Inactive_Non_Enzyme"
+                primary_class = "Non_Enzyme"
+        elif high_prob:
+            primary_class = "Enzyme"
+        elif med_prob:
+            primary_class = "Suspected_Enzyme"
+        else:
+            primary_class = "Non_Enzyme"
 
-        # --- LOGIC BRANCH 2: ACTIVE ENZYMES ---
-        if is_structurally_enzyme:
-            if has_ec: 
-                return "Explicit_EC"
-            elif has_catalytic_kw: 
-                return "Explicit_KW"
-            elif has_kinetics:
-                return "Explicit_Kinetics"
-            elif has_active_site:
-                # Active site but no EC/KW? Likely a known enzyme missing annotations.
-                return "Implicit_Structure"
-            elif has_text_mining and not has_ec: 
-                return "Text_Inferred"
-            else: 
-                return "Implicit"
+        # --- BOOLEAN FLAGS FOR STATS ---
+        stats_flags = {
+            "flag_has_ec": has_ec,
+            "flag_has_active_site": has_active_site,
+            "flag_has_kinetics": features.get('has_kinetics', False),
+            "flag_has_reaction": has_catalytic_activity,
+            "flag_has_experimental": features.get('has_experimental_evidence', False),
+            "flag_is_pseudo": (primary_class == "Pseudo_Enzyme")
+        }
 
-        # --- LOGIC BRANCH 3: CONTEXT MATCHES ---
-        if has_context_clue:
-            # Matches "Toxin" or "Antibiotic" but NO catalytic evidence
-            return "Non_Enzyme_Context"
+        return primary_class, stats_flags
 
-        return None
-
-    def assign_category(self, kw_ids, ec_numbers, enzyme_type, has_sec_met_text):
+    def assign_category(self, kw_ids, ec_numbers, primary_class, has_sec_met_text):
         """
         Determines Functional Category (Context).
         """
-        if "Inactive" in enzyme_type and enzyme_type != "Pseudo_Enzyme": 
-            return "Inactive_Non_Enzyme"
-
         # 1. Secondary Metabolism (Highest Priority)
         if has_sec_met_text: return "Secondary_Metabolism"
         for kw in kw_ids:
@@ -105,61 +111,6 @@ class EnzymeClassifier:
             
         return "Unclassified"
 
-
-    def calculate_confidence(self, enzyme_type, ec_db, ec_name, evidence_types, 
-                             is_reviewed, pe_level, is_fragment, 
-                             has_experimental, has_kinetics, caution_relevant,
-                             has_active_site):
-        """
-        Assigns confidence level (Certified, Gold, Silver, Bronze).
-        """
-        if not enzyme_type or "Non_Enzyme" in enzyme_type: return "None"
-        if "Inactive" in enzyme_type: return "Inactive"
-        if enzyme_type == "Pseudo_Enzyme": return "Bronze"
-        
-        has_full_ec_db = any(ec.count('.') == 3 and '-' not in ec for ec in ec_db)
-        has_full_ec_name = any(ec.count('.') == 3 and '-' not in ec for ec in ec_name)
-        has_strong_context = any(e in ["KW_Catalytic", "Database", "GO_Catalytic"] for e in evidence_types)
-
-        base = "Bronze"
-
-        # --- TIER 1: CERTIFIED ---
-        # Verified Structure AND Verified Activity
-        if has_full_ec_db and (has_experimental or has_kinetics) and not caution_relevant:
-            base = "Certified"
-        
-        # --- TIER 2: GOLD ---
-        # High confidence prediction OR Reviewed with Name/Structure
-        elif has_full_ec_db:
-            base = "Gold"
-        elif has_full_ec_name and is_reviewed:
-            base = "Gold"
-        elif is_reviewed and (has_strong_context or has_active_site):
-            base = "Gold"
-        
-        # --- TIER 3: SILVER ---
-        # Inference / Partially unreviewed
-        elif (ec_db or ec_name): 
-            base = "Silver"
-        elif has_strong_context or enzyme_type == "Text_Inferred":
-            base = "Silver"
-        elif has_active_site:
-            # Active site mapped >= Silver
-            base = "Silver"
-            
-        # --- DOWNGRADES ---
-        # 1. Caution Flag
-        if caution_relevant: return "Bronze"
-        
-        # 2. Fragment / Uncertain Existence
-        # Note: If it has an Active Site, we might be more lenient, 
-        # but generally fragments shouldn't be Certified/Gold.
-        if (pe_level == "5" or is_fragment):
-            if base in ["Certified", "Gold"]:
-                base = "Silver" # Downgrade to Silver instead of Bronze if strong evidence existed
-            
-        return base
-
     def get_ec_hierarchy(self, ec_numbers):
         if not ec_numbers: return "Non-Enzyme", "", "None"
         primary_ec = ec_numbers[0]
@@ -175,4 +126,3 @@ class EnzymeClassifier:
         
         family_name = EC_CLASSES.get(parts[0], "Unclassified")
         return family_name, parts[0], completeness
-

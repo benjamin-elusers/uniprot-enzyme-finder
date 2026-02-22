@@ -2,3 +2,6 @@ data/*
 *.pyc
 *.jsonl.gz
 *.gz
+*.parquet
+*.tsv
+*.json

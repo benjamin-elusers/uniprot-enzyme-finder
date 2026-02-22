@@ -11,7 +11,7 @@ RAW_DATA_FILE = "uniprot_raw_features.jsonl.gz"
 FINAL_OUTPUT_FILE = "uniprot_enzymes_v14.tsv.gz"
 
 # Resources
-OBO_FILE = "go-basic.obo"
+OBO_FILE = "data/go-basic.obo"
 STATS_FILE = "uniprot_stats_summary.json"
 
 # =============================================================================
