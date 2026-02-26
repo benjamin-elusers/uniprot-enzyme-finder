@@ -7,7 +7,7 @@ import time
 from tqdm import tqdm
 
 from core.parser import parse_worker
-from utils.io import fast_xml_stream, writer_listener, load_extraction_checkpoint, save_extraction_checkpoint
+from utils.io import fast_xml_stream, writer_listener, load_extraction_checkpoint, save_extraction_checkpoint, get_estimated_total
 from utils.logger import setup_logger
 from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_FILE, VERSION_DIR, INPUT_FILES
 
@@ -52,18 +52,20 @@ def main():
         stream = fast_xml_stream(input_file, BATCH_SIZE)
         
         # Map workers to the stream
-        for batch_results in tqdm(pool.imap(parse_worker, stream, chunksize=1), desc=f"Parsing {fname}"):
-            entries_processed += len(batch_results)
-            
-            if entries_processed <= skip_count: 
-                continue
+        with tqdm(total=estimated_total, desc=f"Parsing {fname}", unit=" proteins") as pbar:
+            for batch_results in pool.imap(parse_worker, stream, chunksize=1):
+                batch_len = len(batch_results)
+                entries_processed += batch_len
+                pbar.update(batch_len)
                 
-            if batch_results:
-                total_extracted += len(batch_results)
-                queue.put(batch_results)
-                # Save progress periodically
-                save_extraction_checkpoint(CHECKPOINT_FILE, fname, entries_processed)
-
+                if entries_processed <= skip_count: 
+                    continue
+                    
+                if batch_results:
+                    total_extracted += batch_len
+                    queue.put(batch_results)
+                    # Save progress periodically
+                    save_extraction_checkpoint(CHECKPOINT_FILE, fname, entries_processed)
     # Teardown
     queue.put(None)
     writer.join()

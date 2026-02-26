@@ -8,6 +8,46 @@ import gzip
 import re
 import logging
 
+from config.settings import UNIPROT_RELEASE
+
+def get_estimated_total(filename=None):
+    """
+    Finds the specific release notes to get exact total entries.
+    If a filename is provided, it returns the specific count for that file.
+    Otherwise, it returns the combined total.
+    """
+    sp_count = 573000
+    tr_count = 200000000
+    
+    target_note = f"data/relnotes_{UNIPROT_RELEASE}.txt"
+    fallback_note = f"relnotes_{UNIPROT_RELEASE}.txt"
+    
+    note_file = None
+    if os.path.exists(target_note):
+        note_file = target_note
+    elif os.path.exists(fallback_note):
+        note_file = fallback_note
+
+    if note_file:
+        try:
+            with open(note_file, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                sp_match = re.search(r"Swiss-Prot:?\s*([\d,]+)\s+entries", content, re.IGNORECASE)
+                tr_match = re.search(r"TrEMBL:?\s*([\d,]+)\s+entries", content, re.IGNORECASE)
+                
+                if sp_match: sp_count = int(sp_match.group(1).replace(",", ""))
+                if tr_match: tr_count = int(tr_match.group(1).replace(",", ""))
+        except Exception:
+            pass
+
+    if filename:
+        if "sprot" in filename.lower():
+            return sp_count
+        elif "trembl" in filename.lower():
+            return tr_count
+            
+    return sp_count + tr_count
+
 def smart_open(filepath, mode='rt'):
     """
     Opens a file with gzip if it ends in .gz, otherwise normal open.
@@ -89,24 +129,6 @@ def chunk_reader(filepath, chunk_size=2000, skip_to=0):
                 chunk = []
         if chunk:
             yield chunk
-
-def get_estimated_total():
-    """Attempts to find release notes to get the exact total entries for accurate ETA."""
-    total = 200573000 # defaul fallback 
-    note_files = glob.glob("relnotes*.txt") + glob.glob("data/relnotes*.txt")
-    if note_files:
-        try:
-            with open(note_files[0], "r", encoding="utf-8", errors="ignore") as f:
-                content = f.read()
-                sp_match = re.search(r"Swiss-Prot:?\s*([\d,]+)\s+entries", content, re.IGNORECASE)
-                tr_match = re.search(r"TrEMBL:?\s*([\d,]+)\s+entries", content, re.IGNORECASE)
-                sp_count = int(sp_match.group(1).replace(",", "")) if sp_match else 573000
-                tr_count = int(tr_match.group(1).replace(",", "")) if tr_match else 200000000
-                total = sp_count + tr_count
-        except Exception:
-            pass
-    return total
-
 
 def writer_listener(queue, output_file, mode='wt'):
     """Writes dictionaries from a multiprocessing queue to a compressed JSONL file."""
