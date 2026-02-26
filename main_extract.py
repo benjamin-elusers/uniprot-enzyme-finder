@@ -9,16 +9,8 @@ from tqdm import tqdm
 
 from core.parser import UniprotEntryParser
 from config.settings import FULL_VERSION
-from config.settings import CHECKPOINT_FILE, RAW_DATA_FILE
 from utils.io import fast_xml_stream, smart_open
-
-# Configuration
-BATCH_SIZE = 5000
-NUM_WORKERS = max(1, multiprocessing.cpu_count() - 1)
-
-def save_state(fname, count):
-    with open(CHECKPOINT_FILE, 'w') as f:
-        json.dump({"last_file": fname, "entries_done": count}, f)
+from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_FILE
 
 def parse_worker(xml_batch):
     """
@@ -36,11 +28,11 @@ def parse_worker(xml_batch):
             pass
     return results
 
-def writer_listener(queue, output_file):
+def writer_listener(queue, output_file, mode='wt'):
     """
     Writes dictionaries to a compressed JSONL file.
     """
-    with smart_open(output_file, 'wt') as f_out:
+    with smart_open(output_file, mode) as f_out:
         while True:
             batch = queue.get()
             if batch is None: 
@@ -51,8 +43,14 @@ def writer_listener(queue, output_file):
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Extract Raw Features")
     parser.add_argument("--input", "-i", nargs='+', required=True, help="Input XML.gz files")
-    parser.add_argument("--output", "-o", default=f"uniprot_raw_features_{FULL_VERSION}.jsonl.gz", help="Output JSONL.gz")
     args = parser.parse_args()
+
+    # Load Checkpoint
+    checkpoint = {"last_file": None, "entries_done": 0}
+    if os.path.exists(CHECKPOINT_FILE):
+        with open(CHECKPOINT_FILE, 'r') as f:
+            checkpoint = json.load(f)
+
 
     # Setup Writer Queue
     manager = multiprocessing.Manager()
@@ -60,37 +58,43 @@ def main():
     pool = multiprocessing.Pool(NUM_WORKERS)
     
     # Start Writer Process
-    writer = multiprocessing.Process(target=writer_listener, args=(queue, args.output))
+    write_mode = 'at' if checkpoint['entries_done'] > 0 else 'wt'
+    writer = multiprocessing.Process(target=writer_listener, args=(queue, RAW_DATA_FILE, write_mode))
     writer.start()
 
     start_time = time.time()
     total_extracted = 0
 
     print(f"[Start] Extracting features with {NUM_WORKERS} workers...")
+    for input_file in args.input:
 
-    try:
-        for input_file in args.input:
-            if not os.path.exists(input_file):
-                print(f"[Skip] File not found: {input_file}")
-                continue
+        if not os.path.exists(input_file):
+    	    print(f"[Skip] File not found: {input_file}")
+	    continue
 
-            # Create stream generator
-            stream = fast_xml_stream(input_file, BATCH_SIZE)
-            
-            # Map workers to the stream
-            # chunksize=1 ensures the pool doesn't buffer too much RAM
-            for batch_results in tqdm(pool.imap(parse_worker, stream, chunksize=1), desc=f"Parsing {os.path.basename(input_file)}"):
-                if batch_results:
-                    total_extracted += len(batch_results)
-                    queue.put(batch_results)
+        fname = os.path.basename(input_file)
+        skip_count = checkpoint['entries_done'] if checkpoint['last_file'] == fname else 0
 
-    except KeyboardInterrupt:
-        print("\n[Stop] Interrupted by user.")
-    finally:
-        queue.put(None)
-        writer.join()
-        pool.close()
-        pool.join()
+        # Create stream generator
+        entries_processed = 0
+        stream = fast_xml_stream(input_file, BATCH_SIZE)
+        
+        # Map workers to the stream
+        # chunksize=1 ensures the pool doesn't buffer too much RAM
+        for batch_results in tqdm(pool.imap(parse_worker, stream, chunksize=1), desc=f"Parsing {fname}"):
+            entries_processed += len(batch_results)
+            if entries_processed <= skip_count: continue
+    	    if batch_results:
+    	        total_extracted += len(batch_results)
+    	        queue.put(batch_results)
+                # Save progress periodically
+                with open(CHECKPOINT_FILE, 'w') as f:  
+                    json.dump({"last_file": fname, "entries_done": entries_processed}, f)
+
+    queue.put(None)
+    writer.join()
+    pool.close()
+    pool.join()
 
     print(f"\n[Done] Extracted {total_extracted} entries in {(time.time() - start_time) / 60:.1f} minutes.")
     print(f"[Output] {args.output}")
