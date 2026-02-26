@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 
 from core.classifier import EnzymeClassifier
 from core.models import COLUMNS, build_parquet_record
-from utils.io import load_checkpoint, save_checkpoint, chunk_reader, get_estimated_total
+from utils.io import load_checkpoint save_checkpoint chunk_reader, get_estimated_total
 from utils.stats import generate_stats_report
 from utils.obo_loader import load_catalytic_go_ids
 from utils.logger import setup_logger
@@ -43,7 +43,6 @@ def classify_chunk(lines):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError as e: 
-            # Logs the error to the file but doesn't spam the console heavily
             logger.debug(f"JSON decode error: {e}")
             continue
             
@@ -108,34 +107,51 @@ def main():
     if args.save_non_enzymes:
         os.makedirs(args.out_non_enzymes_dir, exist_ok=True)
 
+    # --- Load Checkpoint Dictionary ---
+    checkpoint = load_checkpoint(CHECKPOINT_FILE)
+    fname = os.path.basename(args.input)
+    
+    # Initialize Tracking for this JSONL file if it doesn't exist
+    if fname not in checkpoint:
+        estimated_total = get_estimated_total() # Combined total from relnotes
+        checkpoint[fname] = {
+            "entries_done": 0,
+            "total_entries": estimated_total,
+            "remaining_entries": estimated_total,
+            "completed": False
+        }
+    
+    file_info = checkpoint[fname]
+    
+    if file_info.get("completed", False):
+        logger.info(f"[Skip] {fname} is already fully classified.")
+        return
+
+    start_line = file_info["entries_done"]
+
+    # --- Worker Initialization ---
     valid_go_ids = load_catalytic_go_ids(OBO_FILE)
     num_workers = max(1, multiprocessing.cpu_count() - 1)
-    
     schema = pa.schema([(col, pa.string()) for col in COLUMNS])
     pool = multiprocessing.Pool(num_workers, initializer=worker_init, initargs=(valid_go_ids, args.save_non_enzymes), maxtasksperchild=100)
     
-    start_time = time.time()
-    start_line = load_checkpoint(CHECKPOINT_FILE)
-    current_line_count = start_line
-
     logger.info(f"Classifying from {args.input} with {num_workers} workers...")
     
+    start_time = time.time()
     total_enz_written, total_non_enz_written = 0, 0
     global_stats = Counter()
     
     stream = chunk_reader(args.input, chunk_size=2000, skip_to=start_line)
     
+    # Generate unique parquet file parts so resumes don't overwrite previous data
     enz_file = os.path.join(args.out_enzymes_dir, f"part_{start_line}.parquet")
     non_enz_file = os.path.join(args.out_non_enzymes_dir, f"part_{start_line}.parquet")
 
     writer_enz = pq.ParquetWriter(enz_file, schema, compression='snappy')
     writer_non = pq.ParquetWriter(non_enz_file, schema, compression='snappy') if args.save_non_enzymes else None
 
-    # Get estimated total from relnotes
-    estimated_total = get_estimated_total()
-
     try:
-        with tqdm(total=estimated_total, desc="Classifying", unit=" proteins") as pbar:
+        with tqdm(total=file_info["total_entries"], desc="Classifying", unit=" proteins") as pbar:
             pbar.update(start_line) 
             
             while True:
@@ -147,7 +163,6 @@ def main():
                 
                 for e_cnt, e_records, ne_cnt, ne_records, chunk_stats in results:
                     global_stats.update(chunk_stats)
-                    current_line_count += (e_cnt + ne_cnt)
 
                     if e_cnt > 0:
                         total_enz_written += e_cnt
@@ -157,12 +172,23 @@ def main():
                         total_non_enz_written += ne_cnt
                         writer_non.write_table(pa.Table.from_pylist(ne_records, schema=schema))
 
-                    if pbar.n % (num_workers * 10) == 0: 
-                        save_checkpoint(CHECKPOINT_FILE, current_line_count, FULL_VERSION)
-
-                # Push the progress bar forward by exactly what was processed
+                # Update State
+                file_info["entries_done"] += entries_in_batch
+                file_info["remaining_entries"] = max(0, file_info["total_entries"] - file_info["entries_done"])
+                
+                # Push the progress bar forward
                 pbar.update(entries_in_batch)
 
+                # Periodically save state to disk
+                if pbar.n % (num_workers * 10 * 2000) == 0: 
+                    save_checkpoint(CHECKPOINT_FILE, checkpoint)
+
+        # Mark file as complete once the loop finishes successfully
+        logger.info(f"[Done] Finished classifying {fname}.")
+        file_info["completed"] = True
+        file_info["remaining_entries"] = 0
+        file_info["total_entries"] = file_info["entries_done"] 
+        save_checkpoint(CHECKPOINT_FILE, checkpoint)
     except KeyboardInterrupt:
         logger.warning("Interrupted by user. Checkpoint saved.")
     finally:
@@ -170,7 +196,7 @@ def main():
         if writer_non: writer_non.close()
         pool.close()
         pool.join()
-        save_checkpoint(CHECKPOINT_FILE, current_line_count, FULL_VERSION)
+        save_checkpoint(CHECKPOINT_FILE, checkpoint)
 
     generate_stats_report(global_stats, args.out_stats)
 

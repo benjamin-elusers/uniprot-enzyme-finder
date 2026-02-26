@@ -103,7 +103,7 @@ def fast_xml_stream(filepath, batch_size=5000):
     finally:
         process.terminate()
 
-def load_extraction_checkpoint(checkpoint_file):
+def load_checkpoint(checkpoint_file):
     """Loads the extraction state dictionary."""
     if os.path.exists(checkpoint_file):
         try:
@@ -113,20 +113,10 @@ def load_extraction_checkpoint(checkpoint_file):
             pass
     return {} # Return an empty dict if no checkpoint exists
 
-def save_extraction_checkpoint(checkpoint_file, checkpoint_data):
+def save_checkpoint(checkpoint_file, checkpoint_data):
     """Saves the full extraction progress dictionary with indentation for readability."""
     with open(checkpoint_file, 'w') as f:  
         json.dump(checkpoint_data, f, indent=4)
-
-def load_checkpoint(checkpoint_file):
-    if os.path.exists(checkpoint_file):
-        with open(checkpoint_file, 'r') as f:
-            return json.load(f).get("processed_lines", 0)
-    return 0
-
-def save_checkpoint(checkpoint_file, line_count, version):
-    with open(checkpoint_file, 'w') as f:
-        json.dump({"processed_lines": line_count, "version": version}, f)
 
 def chunk_reader(filepath, chunk_size=2000, skip_to=0):
     """Yields lists of text lines, skipping already processed ones."""

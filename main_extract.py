@@ -6,7 +6,7 @@ import time
 from tqdm import tqdm
 
 from core.parser import parse_worker
-from utils.io import fast_xml_stream, writer_listener, load_extraction_checkpoint, save_extraction_checkpoint, get_estimated_total
+from utils.io import fast_xml_stream, writer_listener, load_checkpoint, save_checkpoint, get_estimated_total
 from utils.logger import setup_logger
 from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_FILE, VERSION_DIR, INPUT_FILES
 
@@ -21,7 +21,7 @@ def main():
     logger.info("Starting UniProt XML extraction pipeline...")
 
     # Load Checkpoint Dictionary
-    checkpoint = load_extraction_checkpoint(CHECKPOINT_FILE)
+    checkpoint = load_checkpoint(CHECKPOINT_FILE)
 
     # Setup Writer Queue
     manager = multiprocessing.Manager()
@@ -83,7 +83,7 @@ def main():
                     # Update dictionary state
                     file_info["entries_done"] += batch_len
                     file_info["remaining_entries"] = max(0, file_info["total_entries"] - file_info["entries_done"])
-                    save_extraction_checkpoint(CHECKPOINT_FILE, checkpoint)
+                    save_checkpoint(CHECKPOINT_FILE, checkpoint)
                     
                     pbar.update(batch_len)
 
@@ -93,7 +93,7 @@ def main():
         file_info["remaining_entries"] = 0
         # Sync the total to the exact amount processed just in case the estimate was off
         file_info["total_entries"] = file_info["entries_done"] 
-        save_extraction_checkpoint(CHECKPOINT_FILE, checkpoint)
+        save_checkpoint(CHECKPOINT_FILE, checkpoint)
 
     # Teardown
     queue.put(None)
