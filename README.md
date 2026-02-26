@@ -54,7 +54,11 @@ This streams the raw XML files and saves the relevant data to output/[VERSION]/u
 Time estimate: ~2 hours for full Swiss-Prot + TrEMBL.
 
 ```bash
-python main_extract.py -i data/uniprot_sprot.xml.gz data/uniprot_trembl.xml.gz
+python main_extract.py # use input files defined in settings.py
+
+# For previous releases you can still give the correct path for each XML files
+python main_extract.py -i data/uniprot_sprot_2026_01.xml.gz data/uniprot_trembl_2026_01.xml.gz
+
 ```
 
 ### Step 2: Classify Enzymes (Run frequently)
