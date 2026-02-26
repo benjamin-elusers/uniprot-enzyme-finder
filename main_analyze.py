@@ -1,18 +1,27 @@
 # main_analyze.py
 
 import argparse
-import csv
 import json
 import time
+import gzip
 from collections import defaultdict, Counter
 from tqdm import tqdm
-from utils.io import smart_open
+
+import pyarrow as pa
+import pyarrow.csv as pv
+
+def get_headers(filepath):
+    """Reads just the first line to get the exact column names."""
+    with gzip.open(filepath, 'rt', encoding='utf-8') as f:
+        header_line = f.readline().strip('\n')
+        return header_line.split('\t')
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 3: Generate Coverage and Stats Reports")
     parser.add_argument("--input", "-i", required=True, help="Input final TSV.gz file")
     parser.add_argument("--out_stats", default="uniprot_stats_summary_v14.json", help="Output JSON stats file")
     parser.add_argument("--out_cov", default="uniprot_field_coverage_v14.tsv", help="Output TSV coverage file")
+    parser.add_argument("-t", "--total", type=int, default=None, help="Total rows (for exact ETA progress bar)")
     args = parser.parse_args()
 
     # =========================================================================
@@ -36,60 +45,81 @@ def main():
         })
     }
 
-    print(f"[Start] Analyzing {args.input}...")
+    print(f"[Start] Analyzing {args.input} (C++ Streaming Mode)...")
     start_time = time.time()
 
     # =========================================================================
-    #   SINGLE PASS STREAMING
+    #   PYARROW CHUNKED STREAMING (Low Memory, High Speed)
     # =========================================================================
+    headers = get_headers(args.input)
     
-    with smart_open(args.input, 'rt') as f:
-        reader = csv.DictReader(f, delimiter='\t')
-        fieldnames = reader.fieldnames
+    # Force all columns to strings to prevent inference crashes on sparse data
+    column_types = {col: pa.string() for col in headers}
+    
+    parse_options = pv.ParseOptions(delimiter='\t')
+    # Stream in 50MB chunks to keep RAM usage extremely low
+    read_options = pv.ReadOptions(block_size=50 * 1024 * 1024) 
+    convert_options = pv.ConvertOptions(column_types=column_types)
 
-        for row in tqdm(reader, desc="Generating Reports", unit=" proteins"):
-            stats["Total_Entries"] += 1
-            is_reviewed = (row.get("reviewed") == "true")
-            
-            if is_reviewed:
-                stats["Reviewed_Count"] += 1
-            else:
-                stats["Unreviewed_Count"] += 1
-
-            # 1. Coverage Tracking
-            for field, value in row.items():
-                if value and str(value).strip():
-                    coverage_counts[field] += 1
-
-            # 2. Statistics Tracking
-            p_class = row.get("primary_class", "Non_Enzyme")
-            class_stats = stats["Classes"][p_class]
-            
-            class_stats["Total"] += 1
-            if is_reviewed:
-                class_stats["Reviewed"] += 1
+    with pv.open_csv(args.input, parse_options=parse_options, read_options=read_options, convert_options=convert_options) as reader:
+        
+        with tqdm(total=args.total, desc="Analyzing", unit=" rows") as pbar:
+            for batch in reader:
+                # Convert the 50MB C++ block into Python dictionaries
+                records = batch.to_pylist()
                 
-            class_stats["Confidence"][row.get("confidence", "None")] += 1
-            class_stats["Enzyme_Type"][row.get("enzyme_type", "None")] += 1
-            class_stats["Functional_Category"][row.get("functional_category", "Unclassified")] += 1
-            class_stats["EC_Completeness"][row.get("ec_completeness", "None")] += 1
-            
-            # Tally Boolean Flags
-            if row.get("flag_has_ec") == "TRUE": class_stats["Evidence_Flags"]["Has_EC"] += 1
-            if row.get("flag_has_active_site") == "TRUE": class_stats["Evidence_Flags"]["Has_Active_Site"] += 1
-            if row.get("flag_has_kinetics") == "TRUE": class_stats["Evidence_Flags"]["Has_Kinetics"] += 1
-            if row.get("flag_has_reaction") == "TRUE": class_stats["Evidence_Flags"]["Has_Reaction"] += 1
-            if row.get("flag_has_experimental") == "TRUE": class_stats["Evidence_Flags"]["Has_Experimental"] += 1
-            if row.get("flag_is_pseudo") == "TRUE": class_stats["Evidence_Flags"]["Is_Pseudo"] += 1
+                for row in records:
+                    stats["Total_Entries"] += 1
+                    # PyArrow parses booleans as strings "true" / "false"
+                    is_reviewed = (row.get("reviewed") == "true")
+                    
+                    if is_reviewed:
+                        stats["Reviewed_Count"] += 1
+                    else:
+                        stats["Unreviewed_Count"] += 1
+
+                    # 1. Coverage Tracking
+                    for field, value in row.items():
+                        if value and str(value).strip():
+                            coverage_counts[field] += 1
+
+                    # 2. Statistics Tracking
+                    p_class = row.get("primary_class")
+                    if not p_class: p_class = "Non_Enzyme"
+                    
+                    class_stats = stats["Classes"][p_class]
+                    
+                    class_stats["Total"] += 1
+                    if is_reviewed:
+                        class_stats["Reviewed"] += 1
+                        
+                    class_stats["Confidence"][row.get("confidence", "None")] += 1
+                    class_stats["Enzyme_Type"][row.get("enzyme_type", "None")] += 1
+                    class_stats["Functional_Category"][row.get("functional_category", "Unclassified")] += 1
+                    class_stats["EC_Completeness"][row.get("ec_completeness", "None")] += 1
+                    
+                    # Tally Boolean Flags
+                    if row.get("flag_has_ec") == "TRUE": class_stats["Evidence_Flags"]["Has_EC"] += 1
+                    if row.get("flag_has_active_site") == "TRUE": class_stats["Evidence_Flags"]["Has_Active_Site"] += 1
+                    if row.get("flag_has_kinetics") == "TRUE": class_stats["Evidence_Flags"]["Has_Kinetics"] += 1
+                    if row.get("flag_has_reaction") == "TRUE": class_stats["Evidence_Flags"]["Has_Reaction"] += 1
+                    if row.get("flag_has_experimental") == "TRUE": class_stats["Evidence_Flags"]["Has_Experimental"] += 1
+                    if row.get("flag_is_pseudo") == "TRUE": class_stats["Evidence_Flags"]["Is_Pseudo"] += 1
+                
+                # Update progress bar
+                pbar.update(batch.num_rows)
+                
+                # Free memory instantly
+                del records
+                del batch
 
     # =========================================================================
     #   FORMAT AND WRITE OUTPUTS
     # =========================================================================
     
     # Write JSON Statistics
-    print(f"[Write] Saving statistics to {args.out_stats}...")
+    print(f"\n[Write] Saving statistics to {args.out_stats}...")
     with open(args.out_stats, 'w') as f_json:
-        # Convert defaultdicts and Counters to standard dicts for clean JSON serialization
         clean_stats = {
             "Total_Entries": stats["Total_Entries"],
             "Reviewed_Count": stats["Reviewed_Count"],
@@ -114,7 +144,7 @@ def main():
         total_rows = stats["Total_Entries"]
         f_cov.write("Field\tCount_Found\tTotal_Entries\tPercentage_Found\tMissing_Count\n")
         
-        for field in fieldnames:
+        for field in headers:
             count = coverage_counts.get(field, 0)
             pct = (count / total_rows * 100) if total_rows > 0 else 0
             missing = total_rows - count

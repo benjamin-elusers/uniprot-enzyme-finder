@@ -1,0 +1,2 @@
+Version detected: 2026_01
+Downloaded on: /media/benjamin/DATA/GitHub/uniprot-enzyme-finder/utils

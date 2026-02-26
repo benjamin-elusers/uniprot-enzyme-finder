@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 # Configuration
 BASE_URL = "https://ftp.uniprot.org/pub/databases/uniprot/current_release"
-DATA_DIR = Path("data")  # Saves to project_root/data/
+DATA_DIR = Path("../data")  # Saves to project_root/data/
 
 def get_remote_file_size(url):
     """Returns the size of the remote file in bytes, or None if failed."""
