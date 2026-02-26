@@ -2,34 +2,40 @@
 import argparse
 import json
 import time
-import gzip
+import os
 from collections import defaultdict, Counter
 from tqdm import tqdm
 
 import pyarrow as pa
-import pyarrow.parquet as pq
-import pyarrow.csv as pv
-from config.settings import FULL_VERSION
-from config.settings import FINAL_OUTPUT_FILE, STATS_FILE
+import pyarrow.dataset as ds
 
-def get_headers(filepath):
-    """Reads just the first line to get the exact column names."""
-    with gzip.open(filepath, 'rt', encoding='utf-8') as f:
-        header_line = f.readline().strip('\n')
-        return header_line.split('\t')
+from utils.logger import setup_logger
+from config.settings import VERSION_DIR, FINAL_OUTPUT_FILE, STATS_FILE
 
 def main():
+    # Set default dataset directory based on your unified settings
+    ENZ_DATASET_DIR = FINAL_OUTPUT_FILE.replace('.parquet', '_dataset')
+    
     parser = argparse.ArgumentParser(description="Stage 3: Generate Coverage and Stats Reports")
-    parser.add_argument("--input", "-i", required=True, help="Input final TSV.gz file")
-    parser.add_argument("--out_stats", default=f"uniprot_stats_summary_{FULL_VERSION}.json", help="Output JSON stats file")
-    parser.add_argument("--out_cov", default=f"uniprot_field_coverage_{FULL_VERSION}.tsv", help="Output TSV coverage file")
-    parser.add_argument("-t", "--total", type=int, default=None, help="Total rows (for exact ETA progress bar)")
+    parser.add_argument("--input", "-i", default=ENZ_DATASET_DIR, help="Input Parquet dataset directory")
+    parser.add_argument("--out_stats", default=STATS_FILE, help="Output JSON stats file")
+    parser.add_argument("--out_cov", default=os.path.join(VERSION_DIR, "uniprot_field_coverage.tsv"), help="Output TSV coverage file")
     args = parser.parse_args()
+
+    # =========================================================================
+    #   SETUP LOGGING
+    # =========================================================================
+    log_file = os.path.join(VERSION_DIR, "analysis.log")
+    logger = setup_logger("pipeline_logger", log_file)
+    logger.info(f"Starting analysis on Parquet Dataset: {args.input}")
+
+    if not os.path.exists(args.input):
+        logger.error(f"Dataset directory not found: {args.input}")
+        return
 
     # =========================================================================
     #   DATA STRUCTURES
     # =========================================================================
-    
     coverage_counts = Counter()
     
     stats = {
@@ -47,32 +53,29 @@ def main():
         })
     }
 
-    print(f"[Start] Analyzing {args.input} (C++ Streaming Mode)...")
     start_time = time.time()
 
     # =========================================================================
-    #   PYARROW CHUNKED STREAMING (Low Memory, High Speed)
+    #   PYARROW DATASET STREAMING (Ultra-low Memory)
     # =========================================================================
-    headers = get_headers(args.input)
+    # Load the entire directory as a single logical dataset
+    dataset = ds.dataset(args.input, format="parquet")
+    headers = dataset.schema.names
     
-    # Force all columns to strings to prevent inference crashes on sparse data
-    column_types = {col: pa.string() for col in headers}
-    
-    parse_options = pv.ParseOptions(delimiter='\t')
-    # Stream in 50MB chunks to keep RAM usage extremely low
-    read_options = pv.ReadOptions(block_size=50 * 1024 * 1024) 
-    convert_options = pv.ConvertOptions(column_types=column_types)
+    # Parquet stores metadata, so counting total rows across all files is instant
+    total_rows = dataset.count_rows()
+    logger.info(f"Dataset loaded. Total entries to process: {total_rows:,}")
 
-    with pv.open_csv(args.input, parse_options=parse_options, read_options=read_options, convert_options=convert_options) as reader:
-        
-        with tqdm(total=args.total, desc="Analyzing", unit=" rows") as pbar:
-            for batch in reader:
-                # Convert the 50MB C++ block into Python dictionaries
+    try:
+        # Stream the dataset in manageable batches
+        with tqdm(total=total_rows, desc="Analyzing", unit=" rows") as pbar:
+            for batch in dataset.to_batches():
                 records = batch.to_pylist()
                 
                 for row in records:
                     stats["Total_Entries"] += 1
-                    # PyArrow parses booleans as strings "true" / "false"
+                    
+                    # PyArrow parses our string booleans
                     is_reviewed = (row.get("reviewed") == "true")
                     
                     if is_reviewed:
@@ -87,7 +90,8 @@ def main():
 
                     # 2. Statistics Tracking
                     p_class = row.get("primary_class")
-                    if not p_class: p_class = "Non_Enzyme"
+                    if not p_class: 
+                        p_class = "Non_Enzyme"
                     
                     class_stats = stats["Classes"][p_class]
                     
@@ -108,19 +112,22 @@ def main():
                     if row.get("flag_has_experimental") == "TRUE": class_stats["Evidence_Flags"]["Has_Experimental"] += 1
                     if row.get("flag_is_pseudo") == "TRUE": class_stats["Evidence_Flags"]["Is_Pseudo"] += 1
                 
-                # Update progress bar
                 pbar.update(batch.num_rows)
                 
-                # Free memory instantly
+                # Force memory cleanup for the batch
                 del records
                 del batch
+
+    except Exception as e:
+        logger.error(f"Error during dataset streaming: {e}")
+        raise
 
     # =========================================================================
     #   FORMAT AND WRITE OUTPUTS
     # =========================================================================
     
     # Write JSON Statistics
-    print(f"\n[Write] Saving statistics to {args.out_stats}...")
+    logger.info(f"Saving statistics to {args.out_stats}...")
     with open(args.out_stats, 'w') as f_json:
         clean_stats = {
             "Total_Entries": stats["Total_Entries"],
@@ -141,18 +148,19 @@ def main():
         json.dump(clean_stats, f_json, indent=4)
 
     # Write TSV Coverage
-    print(f"[Write] Saving coverage report to {args.out_cov}...")
+    logger.info(f"Saving coverage report to {args.out_cov}...")
     with open(args.out_cov, 'w') as f_cov:
-        total_rows = stats["Total_Entries"]
+        total_processed = stats["Total_Entries"]
         f_cov.write("Field\tCount_Found\tTotal_Entries\tPercentage_Found\tMissing_Count\n")
         
         for field in headers:
             count = coverage_counts.get(field, 0)
-            pct = (count / total_rows * 100) if total_rows > 0 else 0
-            missing = total_rows - count
-            f_cov.write(f"{field}\t{count}\t{total_rows}\t{pct:.2f}%\t{missing}\n")
+            pct = (count / total_processed * 100) if total_processed > 0 else 0
+            missing = total_processed - count
+            f_cov.write(f"{field}\t{count}\t{total_processed}\t{pct:.2f}%\t{missing}\n")
 
-    print(f"[Done] Analysis completed in {(time.time() - start_time) / 60:.2f} minutes.")
+    elapsed = (time.time() - start_time) / 60
+    logger.info(f"Analysis completed successfully in {elapsed:.2f} minutes.")
 
 if __name__ == "__main__":
     main()

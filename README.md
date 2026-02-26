@@ -51,7 +51,7 @@ This reads the raw XML files and saves the relevant data to uniprot_raw_features
 Time estimate: ~2 hours for full Swiss-Prot + TrEMBL.
 
 ```bash
-python main_extract.py -i data/uniprot_sprot.xml.gz data/uniprot_trembl.xml.gz -o uniprot_raw_features.jsonl.gz
+python main_extract.py -i data/uniprot_sprot.xml.gz data/uniprot_trembl.xml.gz
 ```
 
 ### Step 2: Classify Enzymes (Run frequently)
@@ -60,7 +60,20 @@ This applies your classification logic (Active Sites, Pseudo-enzymes, Confidence
 Time estimate: ~5-10 minutes.
 
 ```bash
-python main_classify.py -i uniprot_raw_features.jsonl.gz -o final_enzymes_v14.tsv.gz
+python main_classify_count.py -i output/2026_01_v15/uniprot_raw_features.jsonl.gz
+```
+
+*If you also want to save the massive dataset of Non-Enzymes, simply add the flag:*
+> 
+```bash
+python main_classify_count.py -i output/2026_01_v15/uniprot_raw_features.jsonl.gz
+```
+
+### Step 3: Generate reports
+Generate the final coverage report and JSON statistics.
+
+```bash
+python main_analyze.py -i output/2026_01_v15/uniprot_enzymes_dataset
 ```
 
 ### Configuration:

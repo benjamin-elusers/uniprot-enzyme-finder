@@ -6,6 +6,7 @@ import os
 import json
 import gzip
 import re
+import logging
 
 def smart_open(filepath, mode='rt'):
     """
@@ -77,7 +78,7 @@ def chunk_reader(filepath, chunk_size=2000, skip_to=0):
     from utils.io import smart_open # Ensure this is imported
     with smart_open(filepath, 'rt') as f:
         if skip_to > 0:
-            print(f"[Resume] Skipping first {skip_to} lines...")
+            logger.info(f"Resuming... Skipping first {skip_to} lines.")
             for _ in range(skip_to):
                 next(f, None)
         chunk = []
@@ -105,3 +106,27 @@ def get_estimated_total():
         except Exception:
             pass
     return total
+
+
+def writer_listener(queue, output_file, mode='wt'):
+    """Writes dictionaries from a multiprocessing queue to a compressed JSONL file."""
+    # Ensure smart_open is imported or available in this file
+    with smart_open(output_file, mode) as f_out:
+        while True:
+            batch = queue.get()
+            if batch is None: 
+                break
+            for entry in batch:
+                f_out.write(json.dumps(entry) + "\n")
+
+def load_extraction_checkpoint(checkpoint_file):
+    """Loads the extraction state for resuming massive XML files."""
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, 'r') as f:
+            return json.load(f)
+    return {"last_file": None, "entries_done": 0}
+
+def save_extraction_checkpoint(checkpoint_file, fname, entries_processed):
+    """Saves the extraction progress."""
+    with open(checkpoint_file, 'w') as f:  
+        json.dump({"last_file": fname, "entries_done": entries_processed}, f)

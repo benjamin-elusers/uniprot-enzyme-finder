@@ -6,6 +6,7 @@ import json
 import multiprocessing
 import time
 import itertools
+import logging
 from collections import Counter
 from tqdm import tqdm
 
@@ -17,6 +18,7 @@ from core.models import COLUMNS, build_parquet_record
 from utils.io import load_checkpoint, save_checkpoint, chunk_reader, get_estimated_total
 from utils.stats import generate_stats_report
 from utils.obo_loader import load_catalytic_go_ids
+from utils.logger import setup_logger
 from config.settings import CHECKPOINT_FILE, FULL_VERSION, FINAL_OUTPUT_FILE, VERSION_DIR, OBO_FILE
 from config.keywords import CATALYTIC_KW_MAP
 
@@ -31,6 +33,7 @@ def classify_chunk(lines):
     """Worker: Decodes JSON, classifies, appends to lists of dictionaries."""
     classifier = worker_context['classifier']
     save_non_enzymes = worker_context['save_non_enzymes']
+    logger = logging.getLogger("pipeline_logger")
     
     enz_records, non_enz_records = [], []
     stats = Counter()
@@ -39,7 +42,10 @@ def classify_chunk(lines):
     for line in lines:
         try:
             entry = json.loads(line)
-        except json.JSONDecodeError: continue
+        except json.JSONDecodeError as e: 
+            # Logs the error to the file but doesn't spam the console heavily
+            logger.debug(f"JSON decode error: {e}")
+            continue
             
         feats = entry.get('features', {})
         ec_list = entry.get('lists', {}).get('ec_numbers', [])
@@ -93,6 +99,11 @@ def main():
     parser.add_argument("--save_non_enzymes", action="store_true", help="Pass this flag to save the non-enzymes to disk.")
     args = parser.parse_args()
 
+    # --- Setup Logging ---
+    log_file = os.path.join(VERSION_DIR, "classification.log")
+    logger = setup_logger("pipeline_logger", log_file)
+    logger.info("Starting UniProt classification pipeline...")
+
     os.makedirs(args.out_enzymes_dir, exist_ok=True)
     if args.save_non_enzymes:
         os.makedirs(args.out_non_enzymes_dir, exist_ok=True)
@@ -107,7 +118,7 @@ def main():
     start_line = load_checkpoint(CHECKPOINT_FILE)
     current_line_count = start_line
 
-    print(f"[Start] Classifying from {args.input} with {num_workers} workers...")
+    logger.info(f"Classifying from {args.input} with {num_workers} workers...")
     
     total_enz_written, total_non_enz_written = 0, 0
     global_stats = Counter()
@@ -149,7 +160,7 @@ def main():
                 pbar.update(entries_in_batch)
 
     except KeyboardInterrupt:
-        print("\n[Stop] Interrupted by user. Checkpoint saved.")
+        logger.warning("Interrupted by user. Checkpoint saved.")
     finally:
         writer_enz.close()
         if writer_non: writer_non.close()
@@ -159,8 +170,9 @@ def main():
 
     generate_stats_report(global_stats, args.out_stats)
 
-    print(f"\n[Done] Time elapsed: {(time.time() - start_time)/60:.2f} minutes")
-    print(f"[Result] Wrote {total_enz_written} Enzymes to {args.out_enzymes_dir}")
+    elapsed = (time.time() - start_time) / 60
+    logger.info(f"Done! Time elapsed: {elapsed:.2f} minutes")
+    logger.info(f"Wrote {total_enz_written} Enzymes to {args.out_enzymes_dir}")
 
 if __name__ == "__main__":
     main()
