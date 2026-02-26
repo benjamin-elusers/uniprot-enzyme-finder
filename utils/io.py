@@ -103,6 +103,21 @@ def fast_xml_stream(filepath, batch_size=5000):
     finally:
         process.terminate()
 
+def load_extraction_checkpoint(checkpoint_file):
+    """Loads the extraction state dictionary."""
+    if os.path.exists(checkpoint_file):
+        try:
+            with open(checkpoint_file, 'r') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {} # Return an empty dict if no checkpoint exists
+
+def save_extraction_checkpoint(checkpoint_file, checkpoint_data):
+    """Saves the full extraction progress dictionary with indentation for readability."""
+    with open(checkpoint_file, 'w') as f:  
+        json.dump(checkpoint_data, f, indent=4)
+
 def load_checkpoint(checkpoint_file):
     if os.path.exists(checkpoint_file):
         with open(checkpoint_file, 'r') as f:
@@ -141,14 +156,3 @@ def writer_listener(queue, output_file, mode='wt'):
             for entry in batch:
                 f_out.write(json.dumps(entry) + "\n")
 
-def load_extraction_checkpoint(checkpoint_file):
-    """Loads the extraction state for resuming massive XML files."""
-    if os.path.exists(checkpoint_file):
-        with open(checkpoint_file, 'r') as f:
-            return json.load(f)
-    return {"last_file": None, "entries_done": 0}
-
-def save_extraction_checkpoint(checkpoint_file, fname, entries_processed):
-    """Saves the extraction progress."""
-    with open(checkpoint_file, 'w') as f:  
-        json.dump({"last_file": fname, "entries_done": entries_processed}, f)
