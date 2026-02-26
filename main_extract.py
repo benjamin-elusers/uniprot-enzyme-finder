@@ -13,7 +13,7 @@ from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_F
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Extract Raw Features")
-    parser.add_argument("--input", "-i", nargs='+', required=True, help="Input XML.gz files")
+    parser.add_argument("--input", "-i", nargs='+', default=INPUT_FILES, help="Input XML.gz files")
     args = parser.parse_args()
 
     # Setup Logging

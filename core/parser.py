@@ -6,6 +6,7 @@ from config.patterns import (
     EC_NAME_PATTERN, HARD_INACTIVE_PATTERN, SOFT_INACTIVE_PATTERN,
     BIOSYNTH_PATTERN, SEC_MET_PATTERNS
 )
+import logging
 
 class UniprotEntryParser:
     """
@@ -331,3 +332,23 @@ class UniprotEntryParser:
                 elif ftype == "mutagenesis site": out['mutagenesis'].append(entry)
         
         return out
+
+
+def parse_worker(xml_batch):
+    """
+    Worker function: Takes a list of XML strings, returns a list of dicts.
+    Logs exceptions instead of failing silently.
+    """
+    logger = logging.getLogger("pipeline_logger")
+    results = []
+    
+    for xml_str in xml_batch:
+        try:
+            parser = UniprotEntryParser(xml_str)
+            data = parser.parse()
+            if data:
+                results.append(data)
+        except Exception as e:
+            logger.error(f"Failed to parse XML entry: {e}")
+            
+    return results

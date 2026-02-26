@@ -16,7 +16,10 @@ os.makedirs(VERSION_DIR, exist_ok=True)
 
 
 # FILE PATHS
-INPUT_FILES = ["uniprot_sprot.xml.gz", "uniprot_trembl.xml.gz"]
+INPUT_FILES = [
+    f"data/uniprot_sprot_{UNIPROT_RELEASE}.xml.gz", 
+    f"data/uniprot_trembl_{UNIPROT_RELEASE}.xml.gz"
+]
 # output/[FULL_VERSION]/
 RAW_DATA_FILE = os.path.join(VERSION_DIR, "uniprot_raw_features.jsonl.gz")
 STATS_FILE = os.path.join(VERSION_DIR, "uniprot_stats_summary.json")
