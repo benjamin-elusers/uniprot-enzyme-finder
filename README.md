@@ -90,7 +90,8 @@ python main_analyze.py -i output/2026_01_v15/uniprot_enzymes_dataset
 
 
 ## Project organization
-Your project folder should look exactly like this:
+
+The repository follows this modular structure:
 
 ```text
 uniprot-enzyme-finder/
