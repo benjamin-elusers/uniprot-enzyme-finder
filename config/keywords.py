@@ -1,5 +1,10 @@
-# --- KEYWORD CLASSIFICATION ---
-# 1. CATALYTIC KEYWORDS: Presence implies the protein IS an enzyme
+# config/keywords.py
+
+# =============================================================================
+#   CATALYTIC INDICATORS
+# =============================================================================
+
+# Presence of these keywords implies the protein IS an enzyme (Activity)
 CATALYTIC_KW_MAP = {
     "KW-0012": "Acyltransferase",
     "KW-0021": "Allosteric enzyme", 
@@ -52,7 +57,11 @@ CATALYTIC_KW_MAP = {
     "KW-1278": "Translocase"
 }
 
-# 2. CONTEXT KEYWORDS: Presence implies Category, but NOT Activity
+
+# =============================================================================
+#   CONTEXTUAL CATEGORIES
+# =============================================================================
+# Presence implies a category context, but NOT necessarily enzymatic activity
 # (e.g., Toxin, Antibiotic, Metabolism)
 FUNCTIONAL_CATEGORIES = {
     "Secondary_Metabolism": [
@@ -147,16 +156,25 @@ FUNCTIONAL_CATEGORIES = {
     ]
 }
 
+# =============================================================================
+#   CONSTANTS
+# =============================================================================
+
+EC_CLASSES = {
+    "1": "Oxidoreductases",
+    "2": "Transferases",
+    "3": "Hydrolases",
+    "4": "Lyases",
+    "5": "Isomerases",
+    "6": "Ligases",
+    "7": "Translocases"
+}
+
+# Keywords that are too generic to determine function alone
 WEAK_KW_IDS = {
     "KW-0082": "Biosynthesis",
     "KW-0086": "Biodegradation",
     "KW-0133": "Catabolism",
     "KW-0494": "Metabolism",
-}
-
-
-
-EC_CLASSES = {
-    "1": "Oxidoreductases", "2": "Transferases", "3": "Hydrolases", "4": "Lyases",
-    "5": "Isomerases", "6": "Ligases", "7": "Translocases"
+    "KW-0372": "Hormone"
 }

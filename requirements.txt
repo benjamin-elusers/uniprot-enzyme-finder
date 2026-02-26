@@ -1,4 +1,12 @@
+# XML Parsing & Progress
 lxml>=4.9.0
 tqdm>=4.60.0
+
+# Biological Data Fetching & Parsing
 goatools>=1.3.0
 requests>=2.25.0
+
+# High-Performance Data I/O & Analysis
+pyarrow>=10.0.0
+pandas>=2.0.0
+
