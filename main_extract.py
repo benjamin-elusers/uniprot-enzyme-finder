@@ -24,6 +24,7 @@ def main():
     # Load Checkpoint
     checkpoint = load_extraction_checkpoint(CHECKPOINT_FILE)
 
+
     # Setup Writer Queue
     manager = multiprocessing.Manager()
     queue = manager.Queue(maxsize=50)
@@ -45,6 +46,8 @@ def main():
             continue
 
         fname = os.path.basename(input_file)
+        estimated_total = get_estimated_total(fname)
+
         skip_count = checkpoint['entries_done'] if checkpoint['last_file'] == fname else 0
 
         # Create stream generator

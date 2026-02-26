@@ -22,9 +22,7 @@ def main():
     parser.add_argument("--out_cov", default=os.path.join(VERSION_DIR, "uniprot_field_coverage.tsv"), help="Output TSV coverage file")
     args = parser.parse_args()
 
-    # =========================================================================
-    #   SETUP LOGGING
-    # =========================================================================
+    # Setup Logging
     log_file = os.path.join(VERSION_DIR, "analysis.log")
     logger = setup_logger("pipeline_logger", log_file)
     logger.info(f"Starting analysis on Parquet Dataset: {args.input}")
@@ -32,10 +30,7 @@ def main():
     if not os.path.exists(args.input):
         logger.error(f"Dataset directory not found: {args.input}")
         return
-
-    # =========================================================================
-    #   DATA STRUCTURES
-    # =========================================================================
+    
     coverage_counts = Counter()
     
     stats = {
@@ -112,6 +107,7 @@ def main():
                     if row.get("flag_has_experimental") == "TRUE": class_stats["Evidence_Flags"]["Has_Experimental"] += 1
                     if row.get("flag_is_pseudo") == "TRUE": class_stats["Evidence_Flags"]["Is_Pseudo"] += 1
                 
+                # Push the progress bar forward by exactly the chunk size
                 pbar.update(batch.num_rows)
                 
                 # Force memory cleanup for the batch

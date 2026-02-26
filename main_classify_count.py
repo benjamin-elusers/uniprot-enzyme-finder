@@ -99,7 +99,7 @@ def main():
     parser.add_argument("--save_non_enzymes", action="store_true", help="Pass this flag to save the non-enzymes to disk.")
     args = parser.parse_args()
 
-    # --- Setup Logging ---
+    # Setup Logging
     log_file = os.path.join(VERSION_DIR, "classification.log")
     logger = setup_logger("pipeline_logger", log_file)
     logger.info("Starting UniProt classification pipeline...")
@@ -131,8 +131,11 @@ def main():
     writer_enz = pq.ParquetWriter(enz_file, schema, compression='snappy')
     writer_non = pq.ParquetWriter(non_enz_file, schema, compression='snappy') if args.save_non_enzymes else None
 
+    # Get estimated total from relnotes
+    estimated_total = get_estimated_total()
+
     try:
-        with tqdm(total=get_estimated_total(), desc="Classifying", unit=" proteins") as pbar:
+        with tqdm(total=estimated_total, desc="Classifying", unit=" proteins") as pbar:
             pbar.update(start_line) 
             
             while True:
@@ -157,6 +160,7 @@ def main():
                     if pbar.n % (num_workers * 10) == 0: 
                         save_checkpoint(CHECKPOINT_FILE, current_line_count, FULL_VERSION)
 
+                # Push the progress bar forward by exactly what was processed
                 pbar.update(entries_in_batch)
 
     except KeyboardInterrupt:
