@@ -7,9 +7,10 @@ from collections import defaultdict, Counter
 from tqdm import tqdm
 
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pyarrow.csv as pv
 from config.settings import FULL_VERSION
-
+from config.settings import FINAL_OUTPUT_FILE, STATS_FILE
 
 def get_headers(filepath):
     """Reads just the first line to get the exact column names."""
