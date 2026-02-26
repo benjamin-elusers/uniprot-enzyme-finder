@@ -9,7 +9,7 @@ from tqdm import tqdm
 from core.parser import parse_worker
 from utils.io import fast_xml_stream, writer_listener, load_extraction_checkpoint, save_extraction_checkpoint
 from utils.logger import setup_logger
-from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_FILE, VERSION_DIR
+from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_FILE, VERSION_DIR, INPUT_FILES
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Extract Raw Features")
