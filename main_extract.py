@@ -8,11 +8,17 @@ import time
 from tqdm import tqdm
 
 from core.parser import UniprotEntryParser
+from config.settings import FULL_VERSION
+from config.settings import CHECKPOINT_FILE, RAW_DATA_FILE
 from utils.io import fast_xml_stream, smart_open
 
 # Configuration
 BATCH_SIZE = 5000
 NUM_WORKERS = max(1, multiprocessing.cpu_count() - 1)
+
+def save_state(fname, count):
+    with open(CHECKPOINT_FILE, 'w') as f:
+        json.dump({"last_file": fname, "entries_done": count}, f)
 
 def parse_worker(xml_batch):
     """
@@ -45,7 +51,7 @@ def writer_listener(queue, output_file):
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Extract Raw Features")
     parser.add_argument("--input", "-i", nargs='+', required=True, help="Input XML.gz files")
-    parser.add_argument("--output", "-o", default="uniprot_raw_features.jsonl.gz", help="Output JSONL.gz")
+    parser.add_argument("--output", "-o", default=f"uniprot_raw_features_{FULL_VERSION}.jsonl.gz", help="Output JSONL.gz")
     args = parser.parse_args()
 
     # Setup Writer Queue

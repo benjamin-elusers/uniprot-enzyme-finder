@@ -1,5 +1,6 @@
 # main_classify.py
 
+import os
 import argparse
 import json
 import csv
@@ -15,8 +16,10 @@ from tqdm import tqdm
 from core.classifier import EnzymeClassifier
 from utils.io import smart_open
 from utils.obo_loader import load_catalytic_go_ids
+from config.settings import CHECKPOINT_FILE, FULL_VERSION
 from config.settings import OBO_FILE
 from config.keywords import CATALYTIC_KW_MAP
+
 
 COLUMNS = [
     "accession", "id", "protein_name", 
@@ -281,14 +284,43 @@ def generate_stats_report(global_stats, out_file):
     print(f"\n[Stats] Generated detailed statistics report: {out_file}")
 
 
+def load_checkpoint():
+    """Returns the number of proteins already processed."""
+    if os.path.exists(CHECKPOINT_FILE):
+        with open(CHECKPOINT_FILE, 'r') as f:
+            return json.load(f).get("processed_lines", 0)
+    return 0
+
+def save_checkpoint(line_count):
+    """Saves the current progress to disk."""
+    with open(CHECKPOINT_FILE, 'w') as f:
+        json.dump({"processed_lines": line_count, "version": FULL_VERSION}, f)
+
+def chunk_reader(filepath, chunk_size=2000, skip_to=0):
+    """Yields lists of text lines, skipping already processed ones."""
+    with smart_open(filepath, 'rt') as f:
+        # Skip logic
+        if skip_to > 0:
+            print(f"[Resume] Skipping first {skip_to} lines...")
+            for _ in range(skip_to):
+                next(f, None)
+        
+        chunk = []
+        for line in f:
+            chunk.append(line)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stage 2: Classify Enzymes")
     parser.add_argument("--input", "-i", required=True, help="Input raw JSONL.gz")
-    parser.add_argument("--out_enzymes", "-o", default="final_enzymes_v14.tsv.gz", help="Output enzymes TSV")
-    parser.add_argument("--out_non_enzymes", "-n", default="final_non_enzymes_v14.tsv.gz", help="Output non-enzymes TSV")
-    parser.add_argument("--out_stats", "-s", default="uniprot_combinatorial_stats_v14.json", help="Output Stats JSON")
-    
-    # NEW FLAG: By default, we skip writing Non-Enzymes to save massive time and RAM
+    parser.add_argument("--out_enzymes", "-o", default=f"final_enzymes_{FULL_VERSION}.tsv.gz", help="Output enzymes TSV")
+    parser.add_argument("--out_non_enzymes", "-n", default=f"final_non_enzymes_{FULL_VERSION}.tsv.gz", help="Output non-enzymes TSV")
+    parser.add_argument("--out_stats", "-s", default=f"uniprot_combinatorial_stats_{FULL_VERSION}.json", help="Output Stats JSON")
     parser.add_argument("--save_non_enzymes", action="store_true", help="Pass this flag to actually save the non-enzymes to disk.")
     args = parser.parse_args()
 
@@ -308,13 +340,21 @@ def main():
         print("[Info] Non-Enzymes will be SKIPPED from TSV output to save I/O (Stats will still be calculated).")
         
     start_time = time.time()
+    start_line = load_checkpoint()
+    current_line_count = start_line
+
     total_enz_written = 0
     total_non_enz_written = 0
     global_stats = Counter()
     
+    # Open file in 'at' (append text) mode instead of 'wt' (write text)
+    mode = 'at' if start_line > 0 else 'wt'
+    
     try:
-        f_enz = smart_open(args.out_enzymes, 'wt')
-        f_enz.write("\t".join(COLUMNS) + "\n")
+        with smart_open(args.out_enzymes, mode) as f_enz:
+            if start_line == 0:
+                f_enz.write("\t".join(COLUMNS) + "\n")
+            stream = chunk_reader(args.input, chunk_size=2000, skip_to=start_line)
         
         f_non = None
         if args.save_non_enzymes:
@@ -335,13 +375,18 @@ def main():
                 # Unpack and write
                 for e_cnt, e_text, ne_cnt, ne_text, chunk_stats in results:
                     global_stats.update(chunk_stats)
-                    
+                    current_line_count += (e_cnt + ne_cnt)
+
                     if e_cnt > 0:
                         total_enz_written += e_cnt
                         f_enz.write(e_text)
                     if ne_cnt > 0 and args.save_non_enzymes:
                         total_non_enz_written += ne_cnt
                         f_non.write(ne_text)
+
+                    # Periodically save state
+                    if pbar.n % (num_workers * 10) == 0: 
+                        save_checkpoint(current_line_count)
                         
                 pbar.update(entries_in_batch)
                 del super_batch

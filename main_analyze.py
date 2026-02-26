@@ -1,5 +1,4 @@
 # main_analyze.py
-
 import argparse
 import json
 import time
@@ -9,6 +8,8 @@ from tqdm import tqdm
 
 import pyarrow as pa
 import pyarrow.csv as pv
+from config.settings import FULL_VERSION
+
 
 def get_headers(filepath):
     """Reads just the first line to get the exact column names."""
@@ -19,8 +20,8 @@ def get_headers(filepath):
 def main():
     parser = argparse.ArgumentParser(description="Stage 3: Generate Coverage and Stats Reports")
     parser.add_argument("--input", "-i", required=True, help="Input final TSV.gz file")
-    parser.add_argument("--out_stats", default="uniprot_stats_summary_v14.json", help="Output JSON stats file")
-    parser.add_argument("--out_cov", default="uniprot_field_coverage_v14.tsv", help="Output TSV coverage file")
+    parser.add_argument("--out_stats", default=f"uniprot_stats_summary_{FULL_VERSION}.json", help="Output JSON stats file")
+    parser.add_argument("--out_cov", default=f"uniprot_field_coverage_{FULL_VERSION}.tsv", help="Output TSV coverage file")
     parser.add_argument("-t", "--total", type=int, default=None, help="Total rows (for exact ETA progress bar)")
     args = parser.parse_args()
 

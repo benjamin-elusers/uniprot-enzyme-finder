@@ -1,7 +1,9 @@
 data/*
-*.pyc
+output/
+*.json
 *.jsonl.gz
+*.tsv
 *.gz
 *.parquet
-*.tsv
-*.json
+*.pyc
+__pycache__/
