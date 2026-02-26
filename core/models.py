@@ -1,49 +1,96 @@
 # core/models.py
-from dataclasses import dataclass, field
-from typing import List, Optional
 
-@dataclass
-class EnzymeEntry:
-    """
-    Represents a final classified enzyme entry for CSV output.
-    """
-    accession: str
-    id: str
-    protein_name: str
-    
-    # Classification Results
-    enzyme_type: str            # e.g., Explicit_EC, Pseudo_Enzyme
-    confidence: str             # Certified, Gold, Silver, Bronze
-    functional_category: str    # Secondary_Metabolism, Signaling, etc.
-    is_inactive: bool           # True if text says "inactive/suppressor"
-    
-    # Evidence
-    ec_numbers: str             # Semicolon-separated
-    catalytic_activity: str     # Extracted text reaction
-    active_sites: str           # Locations
-    binding_sites: str          # Locations
-    keywords: str               # Semicolon-separated IDs
-    go_terms: str               # Semicolon-separated IDs
-    
-    # Metadata
-    reviewed: bool
-    protein_existence: str
+COLUMNS = [
+    "accession", "id", "protein_name", 
+    "reviewed", "protein_existence", "length", "fragment",
+    "version", "date_modified", "date_created",
+    "organism_id", "organism_name", "kingdom", "lineage", "gene_primary",
+    "primary_class", "enzyme_type", "confidence", "functional_category",
+    "ec_family", "ec_class", "ec_completeness",
+    "flag_has_ec", "flag_has_active_site", "flag_has_kinetics", 
+    "flag_has_reaction", "flag_has_experimental", "flag_is_pseudo",
+    "ec", "ec_from_name", "all_ec",
+    "rhea_ids", "keyword", "go_term",
+    "kinetics_km", "kinetics_vmax", "kinetics_kcat",
+    "reaction_text", "substrates", "products",
+    "ft_act_site", "ft_binding", "ft_mutagenesis",
+    "cc_catalytic_activity", "cc_cofactor", "cc_pathway", "cc_function",
+    "cc_subunit", "cc_subcellular_location", "cc_induction", "cc_similarity",
+    "cc_caution", "caution_activity_relevance", "cc_interaction",
+    "cc_disease", "cc_phenotype",
+    "xref_alphafolddb", "xref_brenda", "xref_reactome", 
+    "xref_string", "xref_ensembl", "xref_kegg", "xref_unipathway"
+]
 
-    def to_dict(self):
-        return {
-            "accession": self.accession,
-            "id": self.id,
-            "protein_name": self.protein_name,
-            "enzyme_type": self.enzyme_type,
-            "confidence": self.confidence,
-            "functional_category": self.functional_category,
-            "is_inactive": "true" if self.is_inactive else "false",
-            "ec_numbers": self.ec_numbers,
-            "catalytic_activity": self.catalytic_activity,
-            "active_sites": self.active_sites,
-            "binding_sites": self.binding_sites,
-            "keywords": self.keywords,
-            "go_terms": self.go_terms,
-            "reviewed": "true" if self.reviewed else "false",
-            "protein_existence": self.protein_existence
-        }
+def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp, stats_flags):
+    """Converts the parsed entry and classifier results into a flat PyArrow-compatible dict."""
+    meta = entry.get('meta', {})
+    text = entry.get('text', {})
+    lists = entry.get('lists', {})
+    ec_list = lists.get('ec_numbers', [])
+    
+    return {
+        "accession": meta.get('accession', ''),
+        "id": meta.get('id', ''),
+        "protein_name": text.get('protein_name', ''),
+        "reviewed": "true" if meta.get('reviewed') else "false",
+        "protein_existence": meta.get('protein_existence', ''),
+        "length": meta.get('length', '0'),
+        "fragment": "true" if meta.get('is_fragment') else "false",
+        "version": meta.get('version', ''),
+        "date_modified": meta.get('date_modified', ''),
+        "date_created": meta.get('date_created', ''),
+        "organism_id": text.get('organism_id', ''),
+        "organism_name": text.get('organism_name', ''),
+        "kingdom": text.get('kingdom', ''),
+        "lineage": text.get('lineage', ''),
+        "gene_primary": text.get('gene_primary', ''),
+        "primary_class": primary_class,
+        "enzyme_type": primary_class,
+        "confidence": conf,
+        "functional_category": cat,
+        "ec_family": fam,
+        "ec_class": cls,
+        "ec_completeness": comp,
+        "flag_has_ec": str(stats_flags.get("flag_has_ec", False)).upper(),
+        "flag_has_active_site": str(stats_flags.get("flag_has_active_site", False)).upper(),
+        "flag_has_kinetics": str(stats_flags.get("flag_has_kinetics", False)).upper(),
+        "flag_has_reaction": str(stats_flags.get("flag_has_reaction", False)).upper(),
+        "flag_has_experimental": str(stats_flags.get("flag_has_experimental", False)).upper(),
+        "flag_is_pseudo": str(stats_flags.get("flag_is_pseudo", False)).upper(),
+        "ec": ";".join(lists.get('ec_db', [])),
+        "ec_from_name": ";".join(lists.get('ec_from_name', [])),
+        "all_ec": ";".join(ec_list),
+        "rhea_ids": ";".join(lists.get('rhea_ids', [])),
+        "keyword": ";".join(lists.get('kw_text', lists.get('kw_ids', []))),
+        "go_term": ";".join(lists.get('go_text', lists.get('go_ids', []))),
+        "kinetics_km": text.get('kinetics_km', ''),
+        "kinetics_vmax": text.get('kinetics_vmax', ''),
+        "kinetics_kcat": text.get('kinetics_kcat', ''),
+        "reaction_text": text.get('catalytic_activity', ''),
+        "substrates": ";".join(lists.get('substrates', [])),
+        "products": ";".join(lists.get('products', [])),
+        "ft_act_site": ";".join(lists.get('active_sites', [])),
+        "ft_binding": ";".join(lists.get('binding_sites', [])),
+        "ft_mutagenesis": ";".join(lists.get('mutagenesis', [])),
+        "cc_catalytic_activity": text.get('catalytic_activity', ''),
+        "cc_cofactor": text.get('cofactor', ''),
+        "cc_pathway": text.get('pathway', ''),
+        "cc_function": text.get('function', ''),
+        "cc_subunit": text.get('subunit', ''),
+        "cc_subcellular_location": text.get('subcellular_location', ''),
+        "cc_induction": text.get('induction', ''),
+        "cc_similarity": text.get('similarity', ''),
+        "cc_caution": text.get('caution', ''),
+        "cc_interaction": text.get('interaction', ''),
+        "cc_disease": text.get('disease', ''),
+        "cc_phenotype": text.get('phenotype', ''),
+        "caution_activity_relevance": "true" if feats.get('caution_activity_relevance') else "false",
+        "xref_alphafolddb": ";".join(lists.get('xref_af', [])),
+        "xref_brenda": ";".join(lists.get('xref_brenda', [])),
+        "xref_reactome": ";".join(lists.get('xref_reactome', [])),
+        "xref_string": ";".join(lists.get('xref_string', [])),
+        "xref_ensembl": ";".join(lists.get('xref_ensembl', [])),
+        "xref_kegg": ";".join(lists.get('xref_kegg', [])),
+        "xref_unipathway": ";".join(lists.get('xref_unipath', []))
+    }

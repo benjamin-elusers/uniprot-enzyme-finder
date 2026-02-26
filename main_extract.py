@@ -69,8 +69,8 @@ def main():
     for input_file in args.input:
 
         if not os.path.exists(input_file):
-    	    print(f"[Skip] File not found: {input_file}")
-	    continue
+            print(f"[Skip] File not found: {input_file}")
+        continue
 
         fname = os.path.basename(input_file)
         skip_count = checkpoint['entries_done'] if checkpoint['last_file'] == fname else 0
@@ -84,9 +84,9 @@ def main():
         for batch_results in tqdm(pool.imap(parse_worker, stream, chunksize=1), desc=f"Parsing {fname}"):
             entries_processed += len(batch_results)
             if entries_processed <= skip_count: continue
-    	    if batch_results:
-    	        total_extracted += len(batch_results)
-    	        queue.put(batch_results)
+            if batch_results:
+                total_extracted += len(batch_results)
+                queue.put(batch_results)
                 # Save progress periodically
                 with open(CHECKPOINT_FILE, 'w') as f:  
                     json.dump({"last_file": fname, "entries_done": entries_processed}, f)
@@ -97,7 +97,7 @@ def main():
     pool.join()
 
     print(f"\n[Done] Extracted {total_extracted} entries in {(time.time() - start_time) / 60:.1f} minutes.")
-    print(f"[Output] {args.output}")
+    print(f"[Output] {RAW_DATA_FILE}")
 
 if __name__ == "__main__":
     main()
