@@ -22,6 +22,8 @@ INPUT_FILES = [
 ]
 # output/[FULL_VERSION]/
 RAW_DATA_FILE = os.path.join(VERSION_DIR, "uniprot_raw_features.jsonl.gz")
+RAW_DATA_DIR = RAW_DATA_FILE.replace('.jsonl.gz', '_dataset')
+
 STATS_FILE = os.path.join(VERSION_DIR, "uniprot_stats_summary.json")
 FINAL_OUTPUT_FILE = os.path.join(VERSION_DIR, "uniprot_enzymes.parquet")
 

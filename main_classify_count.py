@@ -15,11 +15,11 @@ import pyarrow.parquet as pq
 
 from core.classifier import EnzymeClassifier
 from core.models import COLUMNS, build_parquet_record
-from utils.io import load_checkpoint save_checkpoint chunk_reader, get_estimated_total
+from utils.io import load_checkpoint, save_checkpoint, chunk_reader, get_estimated_total
 from utils.stats import generate_stats_report
 from utils.obo_loader import load_catalytic_go_ids
 from utils.logger import setup_logger
-from config.settings import CHECKPOINT_FILE, FULL_VERSION, FINAL_OUTPUT_FILE, VERSION_DIR, OBO_FILE
+from config.settings import CHECKPOINT_FILE, FULL_VERSION, FINAL_OUTPUT_FILE, VERSION_DIR, OBO_FILE, RAW_DATA_DIR
 from config.keywords import CATALYTIC_KW_MAP
 
 worker_context = {}
@@ -91,7 +91,8 @@ def main():
     NON_ENZ_DATASET_DIR = os.path.join(VERSION_DIR, "uniprot_non_enzymes_dataset")
 
     parser = argparse.ArgumentParser(description="Stage 2: Classify Enzymes")
-    parser.add_argument("--input", "-i", required=True, help="Input raw JSONL.gz")
+    # Point default input directly to the new dataset directory
+    parser.add_argument("--input", "-i", default=RAW_DATA_DIR, help="Input raw JSONL dataset directory")
     parser.add_argument("--out_enzymes_dir", "-o", default=ENZ_DATASET_DIR, help="Output enzymes Parquet directory")
     parser.add_argument("--out_non_enzymes_dir", "-n", default=NON_ENZ_DATASET_DIR, help="Output non-enzymes Parquet directory")
     parser.add_argument("--out_stats", "-s", default=os.path.join(VERSION_DIR, "uniprot_combinatorial_stats.json"), help="Output Stats JSON")
@@ -109,11 +110,12 @@ def main():
 
     # --- Load Checkpoint Dictionary ---
     checkpoint = load_checkpoint(CHECKPOINT_FILE)
-    fname = os.path.basename(args.input)
     
-    # Initialize Tracking for this JSONL file if it doesn't exist
+    # Use the folder name (or filename) as the unique tracking key
+    fname = os.path.basename(os.path.normpath(args.input))
+    
     if fname not in checkpoint:
-        estimated_total = get_estimated_total() # Combined total from relnotes
+        estimated_total = get_estimated_total() # Global total ~200M
         checkpoint[fname] = {
             "entries_done": 0,
             "total_entries": estimated_total,
@@ -143,7 +145,7 @@ def main():
     
     stream = chunk_reader(args.input, chunk_size=2000, skip_to=start_line)
     
-    # Generate unique parquet file parts so resumes don't overwrite previous data
+    # Append the starting line to the parquet filename so resumes write to a fresh part file
     enz_file = os.path.join(args.out_enzymes_dir, f"part_{start_line}.parquet")
     non_enz_file = os.path.join(args.out_non_enzymes_dir, f"part_{start_line}.parquet")
 
@@ -175,8 +177,6 @@ def main():
                 # Update State
                 file_info["entries_done"] += entries_in_batch
                 file_info["remaining_entries"] = max(0, file_info["total_entries"] - file_info["entries_done"])
-                
-                # Push the progress bar forward
                 pbar.update(entries_in_batch)
 
                 # Periodically save state to disk
@@ -189,6 +189,7 @@ def main():
         file_info["remaining_entries"] = 0
         file_info["total_entries"] = file_info["entries_done"] 
         save_checkpoint(CHECKPOINT_FILE, checkpoint)
+
     except KeyboardInterrupt:
         logger.warning("Interrupted by user. Checkpoint saved.")
     finally:

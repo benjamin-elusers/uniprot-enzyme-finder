@@ -3,40 +3,62 @@ import argparse
 import multiprocessing
 import os
 import time
+import json
+import gzip
+import logging
 from tqdm import tqdm
 
-from core.parser import parse_worker
-from utils.io import fast_xml_stream, writer_listener, load_checkpoint, save_checkpoint, get_estimated_total
+from core.parser import UniprotEntryParser
+from utils.io import fast_xml_stream, load_checkpoint, save_checkpoint, get_estimated_total
 from utils.logger import setup_logger
-from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_FILE, CHECKPOINT_FILE, VERSION_DIR, INPUT_FILES
+from config.settings import NUM_WORKERS, BATCH_SIZE, RAW_DATA_DIR, CHECKPOINT_FILE, VERSION_DIR, INPUT_FILES
+
+def parse_and_write_worker(xml_batch):
+    """
+    Worker parses XML and appends directly to its own designated file.
+    """
+    # Get the unique name of the current process (e.g., 'ForkPoolWorker-1')
+    worker_name = multiprocessing.current_process().name
+    out_path = os.path.join(RAW_DATA_DIR, f"{worker_name}.jsonl.gz")
+    
+    logger = logging.getLogger("pipeline_logger")
+    results = []
+    
+    for xml_str in xml_batch:
+        try:
+            parser = UniprotEntryParser(xml_str)
+            data = parser.parse()
+            if data:
+                results.append(data)
+        except Exception as e:
+            logger.debug(f"Failed to parse XML: {e}")
+            
+    if results:
+        # Append mode ('at') seamlessly adds a new compressed block to the worker's file
+        with gzip.open(out_path, 'at', encoding='utf-8') as f:
+            for res in results:
+                f.write(json.dumps(res) + "\n")
+                
+    # Return only the integer count back to the main thread (Memory safe!)
+    return len(results)
 
 def main():
     parser = argparse.ArgumentParser(description="Stage 1: Extract Raw Features")
     parser.add_argument("--input", "-i", nargs='+', default=INPUT_FILES, help="Input XML.gz files")
     args = parser.parse_args()
 
-    # Setup Logging
     log_file = os.path.join(VERSION_DIR, "extraction.log")
     logger = setup_logger("pipeline_logger", log_file)
     logger.info("Starting UniProt XML extraction pipeline...")
 
-    # Load Checkpoint Dictionary
     checkpoint = load_checkpoint(CHECKPOINT_FILE)
+    os.makedirs(RAW_DATA_DIR, exist_ok=True)
 
-    # Setup Writer Queue
-    manager = multiprocessing.Manager()
-    queue = manager.Queue(maxsize=50)
     pool = multiprocessing.Pool(NUM_WORKERS)
-    
-    # Use append mode if ANY file in the dictionary has processed entries
-    write_mode = 'at' if any(info.get('entries_done', 0) > 0 for info in checkpoint.values()) else 'wt'
-    writer = multiprocessing.Process(target=writer_listener, args=(queue, RAW_DATA_FILE, write_mode))
-    writer.start()
-
     start_time = time.time()
     total_extracted_this_run = 0
 
-    logger.info(f"Extracting features with {NUM_WORKERS} workers...")
+    logger.info(f"Extracting features to {RAW_DATA_DIR} with {NUM_WORKERS} workers...")
     
     for input_file in args.input:
         if not os.path.exists(input_file):
@@ -45,7 +67,7 @@ def main():
 
         fname = os.path.basename(input_file)
         
-        # Initialize file tracking if it doesn't exist
+        # Initialize tracking
         if fname not in checkpoint:
             estimated_total = get_estimated_total(fname)
             checkpoint[fname] = {
@@ -62,48 +84,44 @@ def main():
             continue
 
         skip_count = file_info["entries_done"]
-        stream_entries = 0 # Tracks our position in the current XML stream
         stream = fast_xml_stream(input_file, BATCH_SIZE)
         
-        with tqdm(total=file_info["total_entries"], desc=f"Parsing {fname}", unit=" proteins") as pbar:
-            pbar.update(skip_count) # Advance the visual progress bar to where we left off
-            
-            for batch_results in pool.imap(parse_worker, stream, chunksize=1):
-                batch_len = len(batch_results)
-                stream_entries += batch_len
-                
-                # Fast-forward until we reach the skipped point
-                if stream_entries <= skip_count: 
+        # This generator acts as a gatekeeper, preventing skipped XML strings 
+        # from ever being sent to the workers or taking up RAM
+        def generate_payloads():
+            stream_entries = 0
+            for batch in stream:
+                stream_entries += len(batch)
+                if stream_entries <= skip_count:
                     continue
-                    
-                if batch_results:
-                    total_extracted_this_run += batch_len
-                    queue.put(batch_results)
-                    
-                    # Update dictionary state
-                    file_info["entries_done"] += batch_len
-                    file_info["remaining_entries"] = max(0, file_info["total_entries"] - file_info["entries_done"])
-                    save_checkpoint(CHECKPOINT_FILE, checkpoint)
-                    
-                    pbar.update(batch_len)
+                yield batch
 
-        # Mark file as complete once the loop finishes successfully
+        with tqdm(total=file_info["total_entries"], desc=f"Parsing {fname}", unit=" proteins") as pbar:
+            pbar.update(skip_count) 
+            
+            # imap_unordered ensures we only load as many batches into memory as we have workers
+            for batch_len in pool.imap_unordered(parse_and_write_worker, generate_payloads(), chunksize=1):
+                total_extracted_this_run += batch_len
+                
+                # State updates
+                file_info["entries_done"] += batch_len
+                file_info["remaining_entries"] = max(0, file_info["total_entries"] - file_info["entries_done"])
+                save_checkpoint(CHECKPOINT_FILE, checkpoint)
+                
+                pbar.update(batch_len)
+
         logger.info(f"[Done] Finished processing {fname}.")
         file_info["completed"] = True
         file_info["remaining_entries"] = 0
-        # Sync the total to the exact amount processed just in case the estimate was off
         file_info["total_entries"] = file_info["entries_done"] 
         save_checkpoint(CHECKPOINT_FILE, checkpoint)
 
-    # Teardown
-    queue.put(None)
-    writer.join()
     pool.close()
     pool.join()
 
     elapsed = (time.time() - start_time) / 60
     logger.info(f"Extracted {total_extracted_this_run} entries this session in {elapsed:.1f} minutes.")
-    logger.info(f"Output appended to: {RAW_DATA_FILE}")
+    logger.info(f"Output saved to Dataset Directory: {RAW_DATA_DIR}")
 
 if __name__ == "__main__":
     main()

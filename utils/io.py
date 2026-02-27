@@ -7,6 +7,7 @@ import json
 import gzip
 import re
 import logging
+from pathlib import Path
 
 from config.settings import UNIPROT_RELEASE
 
@@ -118,22 +119,53 @@ def save_checkpoint(checkpoint_file, checkpoint_data):
     with open(checkpoint_file, 'w') as f:  
         json.dump(checkpoint_data, f, indent=4)
 
-def chunk_reader(filepath, chunk_size=2000, skip_to=0):
-    """Yields lists of text lines, skipping already processed ones."""
-    from utils.io import smart_open # Ensure this is imported
-    with smart_open(filepath, 'rt') as f:
-        if skip_to > 0:
-            logger.info(f"Resuming... Skipping first {skip_to} lines.")
-            for _ in range(skip_to):
-                next(f, None)
-        chunk = []
-        for line in f:
-            chunk.append(line)
-            if len(chunk) >= chunk_size:
-                yield chunk
-                chunk = []
-        if chunk:
-            yield chunk
+def get_dataset_files(filepath_or_dir, pattern="*.jsonl.gz"):
+    """
+    Resolves a file or directory path into a sorted list of file paths.
+    """
+    path_obj = Path(filepath_or_dir)
+    
+    if path_obj.is_dir():
+        # .glob() returns Path objects, we convert them to strings
+        return sorted(str(p) for p in path_obj.glob(pattern))
+    elif path_obj.exists():
+        return [str(path_obj)]
+    
+    return []
+
+def chunk_reader(filepath_or_dir, chunk_size=2000, skip_to=0):
+    """
+    Yields lists of text lines, seamlessly handling single files or dataset directories.
+    """
+    from utils.io import smart_open 
+    logger = logging.getLogger("pipeline_logger")
+    
+    # Delegate the file resolution to the helper function
+    files = get_dataset_files(filepath_or_dir)
+        
+    if not files:
+        logger.error(f"[Error] No files found for path: {filepath_or_dir}")
+        return
+        
+    if skip_to > 0:
+        logger.info(f"Resuming... Skipping first {skip_to} lines across the dataset.")
+        
+    lines_to_skip = skip_to
+    chunk = []
+    
+    for fpath in files:
+        with smart_open(fpath, 'rt') as f:
+            for line in f:
+                if lines_to_skip > 0:
+                    lines_to_skip -= 1
+                    continue
+                    
+                chunk.append(line)
+                if len(chunk) >= chunk_size:
+                    yield chunk
+                    chunk = []
+    if chunk:
+        yield chunk
 
 def writer_listener(queue, output_file, mode='wt'):
     """Writes dictionaries from a multiprocessing queue to a compressed JSONL file."""
