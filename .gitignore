@@ -7,4 +7,5 @@ output/*
 *.gz
 *.parquet
 *.pyc
+*.xml
 __pycache__/
