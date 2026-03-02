@@ -91,7 +91,7 @@ def main():
     NON_ENZ_DATASET_DIR = os.path.join(VERSION_DIR, "uniprot_non_enzymes_dataset")
 
     parser = argparse.ArgumentParser(description="Stage 2: Classify Enzymes")
-    # Point default input directly to the new dataset directory
+    # FIX: default=RAW_DATA_DIR instead of required=True
     parser.add_argument("--input", "-i", default=RAW_DATA_DIR, help="Input raw JSONL dataset directory")
     parser.add_argument("--out_enzymes_dir", "-o", default=ENZ_DATASET_DIR, help="Output enzymes Parquet directory")
     parser.add_argument("--out_non_enzymes_dir", "-n", default=NON_ENZ_DATASET_DIR, help="Output non-enzymes Parquet directory")
@@ -104,6 +104,7 @@ def main():
     logger = setup_logger("pipeline_logger", log_file)
     logger.info("Starting UniProt classification pipeline...")
 
+    # The directories are successfully created here
     os.makedirs(args.out_enzymes_dir, exist_ok=True)
     if args.save_non_enzymes:
         os.makedirs(args.out_non_enzymes_dir, exist_ok=True)
@@ -152,14 +153,17 @@ def main():
     writer_enz = pq.ParquetWriter(enz_file, schema, compression='snappy')
     writer_non = pq.ParquetWriter(non_enz_file, schema, compression='snappy') if args.save_non_enzymes else None
 
+    MAX_ENTRIES_PER_FILE = 20_000_000  # Split files every 5M entries processed
+    current_file_start = start_line
+
     try:
         with tqdm(total=file_info["total_entries"], desc="Classifying", unit=" proteins") as pbar:
-            pbar.update(start_line) 
-            
+            pbar.update(start_line)             
             while True:
-                super_batch = list(itertools.islice(stream, num_workers * 4))
+                # 50 chunks * 2000 chunk_size = exactly 100,000 entries per loop
+                super_batch = list(itertools.islice(stream, 50))
                 if not super_batch: break
-                    
+
                 entries_in_batch = sum(len(chunk) for chunk in super_batch)
                 results = pool.map(classify_chunk, super_batch)
                 
@@ -178,6 +182,18 @@ def main():
                 file_info["entries_done"] += entries_in_batch
                 file_info["remaining_entries"] = max(0, file_info["total_entries"] - file_info["entries_done"])
                 pbar.update(entries_in_batch)
+
+                if (file_info["entries_done"] - current_file_start) >= MAX_ENTRIES_PER_FILE:
+                    writer_enz.close()
+                    enz_file = os.path.join(args.out_enzymes_dir, f"part_{file_info['entries_done']}.parquet")
+                    writer_enz = pq.ParquetWriter(enz_file, schema, compression='snappy')
+                    
+                    if writer_non:
+                        writer_non.close()
+                        non_enz_file = os.path.join(args.out_non_enzymes_dir, f"part_{file_info['entries_done']}.parquet")
+                        writer_non = pq.ParquetWriter(non_enz_file, schema, compression='snappy')
+                        
+                    current_file_start = file_info["entries_done"]
 
                 # Periodically save state to disk
                 if pbar.n % (num_workers * 10 * 2000) == 0: 

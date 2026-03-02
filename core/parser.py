@@ -201,10 +201,18 @@ class UniprotEntryParser:
             elif d_type == "GO":
                 term = child.find(f"{self.ns}property[@type='term']")
                 val = term.get("value", "") if term is not None else ""
+                
+                # Evidence Code (ECO)
+                ev_prop = child.find(f"{self.ns}property[@type='evidence']")
+                ev_val = ev_prop.get("value", "") if ev_prop is not None else "Unknown"
+                eco_code = ev_val.split("|")[0] if ev_val else "Unknown"
+
                 out['go_ids'].append(d_id)
-                if val: out['go_text'].append(f"{d_id}({val})")
+                if val: out['go_text'].append(f"{d_id}|{eco_code}|{val}")
+                
             elif d_type == "Ensembl": out['xref_ensembl'].append(d_id)
             elif d_type == "AlphaFoldDB": out['xref_af'].append(d_id)
+            elif d_type == "BRENDA": out['xref_brenda'].append(d_id)
             elif d_type == "KEGG": out['xref_kegg'].append(d_id)
             elif d_type == "Reactome": out['xref_reactome'].append(d_id)
             elif d_type == "STRING": out['xref_string'].append(d_id)
