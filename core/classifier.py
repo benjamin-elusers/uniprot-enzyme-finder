@@ -14,66 +14,123 @@ class EnzymeClassifier:
             for kw in kws:
                 self.context_kw_map[kw] = category
 
+    def _determine_primary_class(self, is_inactive, high_prob, med_prob, has_binding_site):
+        """Decision tree logic isolated for modularity."""
+        if is_inactive:
+            # If it has enzyme structure/clues but is flagged inactive -> Pseudo
+            if high_prob or med_prob or has_binding_site:
+                return "Pseudo_Enzyme"
+            return "Non_Enzyme"
+        
+        if high_prob:
+            return "Enzyme"
+        elif med_prob:
+            return "Suspected_Enzyme"
+        
+        return "Non_Enzyme"
+
+    def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
+        """Evaluates entry features and returns explicitly matched evidence fields and values."""
+        ev_fields, ev_vals = [], []
+        
+        if entry_data['lists'].get('ec_numbers'): 
+            ev_fields.append("EC_Number")
+            ev_vals.append(";".join(entry_data['lists']['ec_numbers']))
+            
+        if features.get('has_reaction'): 
+            ev_fields.append("Reaction_Text")
+            ev_vals.append("Reaction found")
+            
+        if entry_data['lists'].get('enzyme_dbs'): 
+            ev_fields.append("Enzyme_DB")
+            ev_vals.append(";".join(entry_data['lists']['enzyme_dbs']))
+            
+        if entry_data['lists'].get('rhea_ids'): 
+            ev_fields.append("Rhea_ID")
+            ev_vals.append(";".join(entry_data['lists']['rhea_ids']))
+            
+        if catalytic_gos: 
+            ev_fields.append("GO_Catalytic")
+            ev_vals.append(";".join(catalytic_gos))
+            
+        if features.get('has_active_site'): 
+            ev_fields.append("Active_Site")
+            ev_vals.append("Active site annotated")
+            
+        if features.get('has_catalytic_kw'): 
+            ev_fields.append("Keyword_Catalytic")
+            ev_vals.append("Catalytic keyword matched")
+            
+        if protein_name and ENZYME_NAME_ENDINGS.search(protein_name): 
+            ev_fields.append("Protein_Name")
+            ev_vals.append(protein_name)
+            
+        if features.get('has_biosynth_text'): 
+            ev_fields.append("Text_Mining")
+            ev_vals.append("Biosynthesis context")
+
+        return ev_fields, ev_vals
+
+
     def classify_entry(self, entry_data, features):
         """
         Main decision tree. Returns the primary category and a dictionary 
         of exact boolean flags for plotting downstream.
         """
-        # Unpack evidence tiers
-        is_inactive_text = features.get('is_inactive_text', False)
+        # 1. Base Extractions & Setup
         caution_text = entry_data['text'].get('caution', '').lower()
-        if "inactive" in caution_text or "catalytically dead" in caution_text:
-            is_inactive_text = True
-            
-        # TIER 1: High Probability (Obvious)
-        has_ec = bool(entry_data['lists'].get('ec_numbers'))
-        has_catalytic_activity = features.get('has_reaction', False)
-        has_enzyme_dbs = bool(entry_data['lists'].get('enzyme_dbs'))
-        has_rhea = bool(entry_data['lists'].get('rhea_ids'))
-        
-        # Check GO Catalytic descendants
-        go_ids = entry_data['lists'].get('go_ids', [])
-        has_catalytic_go = any(go in self.valid_catalytic_go_ids for go in go_ids) if self.valid_catalytic_go_ids else False
-        
-        high_prob = any([has_ec, has_catalytic_activity, has_enzyme_dbs, has_rhea, has_catalytic_go])
-
-        # TIER 2: Medium Probability (Clues)
-        has_active_site = features.get('has_active_site', False)
-        has_catalytic_kw = features.get('has_catalytic_kw', False)
-        has_biosynth_text = features.get('has_biosynth_text', False)
+        is_inactive_text = features.get('is_inactive_text', False) or "inactive" in caution_text or "catalytically dead" in caution_text
         
         protein_name = entry_data['text'].get('protein_name', '')
         has_enzyme_name = bool(ENZYME_NAME_ENDINGS.search(protein_name))
         
-        med_prob = any([has_active_site, has_catalytic_kw, has_biosynth_text, has_enzyme_name])
+        go_ids = entry_data['lists'].get('go_ids', [])
+        catalytic_gos = [go for go in go_ids if go in self.valid_catalytic_go_ids] if self.valid_catalytic_go_ids else []
 
-        # TIER 3: Low Probability / Context (Binding, pathways, etc. - mostly tracked for context)
+        # 2. Probability Tiering
+        high_prob = any([
+            bool(entry_data['lists'].get('ec_numbers')),
+            features.get('has_reaction', False),
+            bool(entry_data['lists'].get('enzyme_dbs')),
+            bool(entry_data['lists'].get('rhea_ids')),
+            bool(catalytic_gos)
+        ])
+
+        med_prob = any([
+            features.get('has_active_site', False),
+            features.get('has_catalytic_kw', False),
+            features.get('has_biosynth_text', False),
+            has_enzyme_name
+        ])
+        
         has_binding_site = features.get('has_binding_site', False)
 
-        # --- DECISION TREE ---
-        primary_class = "Non_Enzyme"
-        
-        if is_inactive_text:
-            # If it has enzyme structure/clues but is flagged inactive -> Pseudo
-            if high_prob or med_prob or has_binding_site:
-                primary_class = "Pseudo_Enzyme"
-            else:
-                primary_class = "Non_Enzyme"
-        elif high_prob:
-            primary_class = "Enzyme"
-        elif med_prob:
-            primary_class = "Suspected_Enzyme"
-        else:
-            primary_class = "Non_Enzyme"
+        # 3. Determine Class (Modular call)
+        primary_class = self._determine_primary_class(
+            is_inactive=is_inactive_text, 
+            high_prob=high_prob, 
+            med_prob=med_prob, 
+            has_binding_site=has_binding_site
+        )
 
-        # --- BOOLEAN FLAGS FOR STATS ---
+        # 4. Gather Evidence Strings (Modular call)
+        ev_fields, ev_vals = self._gather_evidence(
+            entry_data=entry_data, 
+            features=features, 
+            catalytic_gos=catalytic_gos, 
+            protein_name=protein_name
+        )
+
+        # 5. Build Stats Flags
         stats_flags = {
-            "flag_has_ec": has_ec,
-            "flag_has_active_site": has_active_site,
+            "flag_has_ec": bool(entry_data['lists'].get('ec_numbers')),
+            "flag_has_active_site": features.get('has_active_site', False),
             "flag_has_kinetics": features.get('has_kinetics', False),
-            "flag_has_reaction": has_catalytic_activity,
+            "flag_has_reaction": features.get('has_reaction', False),
             "flag_has_experimental": features.get('has_experimental_evidence', False),
-            "flag_is_pseudo": (primary_class == "Pseudo_Enzyme")
+            "flag_is_pseudo": (primary_class == "Pseudo_Enzyme"),
+            "evidence_field": "|".join(ev_fields) if ev_fields else "None",
+            "evidence_value": "|".join(ev_vals) if ev_vals else "None"
         }
 
         return primary_class, stats_flags
