@@ -79,7 +79,8 @@ class UniprotEntryParser:
         data['lists'].update(comments['lists'])
         data['features']['has_kinetics'] = comments['has_kinetics']
         data['features']['has_reaction'] = bool(comments['text']['catalytic_activity'])
-        
+        data['features']['is_passive_transport'] = comments.get('is_passive_transport', False)
+
         # --- 5. Evidence Scanning (DB Refs, GO, Keywords, Experimental) ---
         refs = self._scan_references()
         for k, v in refs.items():
@@ -94,7 +95,7 @@ class UniprotEntryParser:
         data['lists']['mutagenesis'] = feats['mutagenesis']
         data['features']['has_active_site'] = bool(feats['active_sites'])
         data['features']['has_binding_site'] = bool(feats['binding_sites'])
-        
+
         # Check mutagenesis for inactive flags
         if any(kw in m.lower() for m in feats['mutagenesis'] for kw in ["inactive", "loss", "abolish"]):
             data['features']['is_inactive_text'] = True
@@ -228,6 +229,43 @@ class UniprotEntryParser:
 
         return out
 
+    def _clean_chemical_names(self, side_string):
+        """
+        Removes transport/localization markers like (in), (out), or [cytoplasm].
+        """
+        # Remove markers like (in), (out), (external)
+        cleaned = re.sub(r'\((in|out|external|internal)\)', '', side_string, flags=re.IGNORECASE)
+        # Remove compartment markers in brackets
+        cleaned = re.sub(r'\[.*?\]', '', cleaned)
+        
+        # Split, sort, and rejoin to allow stable comparison of chemical identity
+        molecules = [m.strip().lower() for m in cleaned.split(' + ')]
+        return " + ".join(sorted(filter(None, molecules)))
+
+    def _process_sub_reactions(self, catalytic_text):
+        """
+        Splits alternative reactions and identifies passive transport.
+        """
+        sub_rxns = [r.strip() for r in catalytic_text.split('|')]
+        processed_data = {
+            'clean_equations': [],
+            'is_passive_transport': True  # Assume passive until proven otherwise
+        }
+
+        for rxn in sub_rxns:
+            if " = " not in rxn:
+                continue
+                
+            left, right = rxn.split(" = ", 1)
+            
+            # Compare cleaned versions to see if chemistry actually changes
+            if self._clean_chemical_names(left) != self._clean_chemical_names(right):
+                processed_data['is_passive_transport'] = False
+            
+            processed_data['clean_equations'].append((left, right))
+
+        return processed_data
+
     def _extract_comments(self):
         """Extracts text blocks, reaction data, context, and kinetics."""
         res = {
@@ -277,24 +315,37 @@ class UniprotEntryParser:
 
             # Catalytic Activity & Reactions
             elif ctype == "catalytic activity":
+                # 1. Handle Standard Reaction and Sub-reactions
                 reaction = c.find(f"{self.ns}reaction")
                 if reaction is not None:
                     text_eq = reaction.findtext(f"{self.ns}text")
                     if text_eq:
                         res['text']['catalytic_activity'].append(text_eq)
-                        if " = " in text_eq:
-                            parts = text_eq.split(" = ")
-                            if len(parts) == 2:
-                                res['lists']['substrates'].append(parts[0].strip())
-                                res['lists']['products'].append(parts[1].strip())
+                        
+                        # Process sub-reactions for substrates/products and passive transport flags
+                        rxn_info = self._process_sub_reactions(text_eq)
+                        
+                        # Update passive transport status (only if not already proven active)
+                        if not rxn_info['is_passive_transport']:
+                            res['is_passive_transport'] = False
+                        
+                        # Extract individual molecules from all sub-reactions
+                        for left, right in rxn_info['clean_equations']:
+                            res['lists']['substrates'].extend([s.strip() for s in left.split(' + ')])
+                            res['lists']['products'].extend([p.strip() for p in right.split(' + ')])
+
+                    # Preserved: Extract Rhea IDs from the reaction
                     for dbref in reaction.findall(f"{self.ns}dbReference"):
-                        if dbref.get("type") == "Rhea": res['lists']['rhea_ids'].append(dbref.get("id"))
+                        if dbref.get("type") == "Rhea": 
+                            res['lists']['rhea_ids'].append(dbref.get("id"))
                 
+                # 2. Preserved: Handle Physiological Reactions
                 phys_rxn = c.find(f"{self.ns}physiologicalReaction")
                 if phys_rxn is not None:
                     d_dir = phys_rxn.get("direction", "")
                     for dbref in phys_rxn.findall(f"{self.ns}dbReference"):
-                        if dbref.get("type") == "Rhea": res['lists']['rhea_ids'].append(f"{dbref.get('id')}({d_dir})")
+                        if dbref.get("type") == "Rhea": 
+                            res['lists']['rhea_ids'].append(f"{dbref.get('id')}({d_dir})")
 
             # Kinetics & Biophysicochemical
             elif ctype == "biophysicochemical properties":

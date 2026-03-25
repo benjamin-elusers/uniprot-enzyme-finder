@@ -14,17 +14,17 @@ class EnzymeClassifier:
             for kw in kws:
                 self.context_kw_map[kw] = category
 
-    def _determine_primary_class(self, is_inactive, high_prob, med_prob, has_binding_site):
-        """Decision tree logic isolated for modularity."""
+    def _determine_primary_class(self, is_inactive, high_prob, med_prob, has_binding_site, is_passive_transport):
         if is_inactive:
-            # If it has enzyme structure/clues but is flagged inactive -> Pseudo
-            if high_prob or med_prob or has_binding_site:
-                return "Pseudo_Enzyme"
-            return "Non_Enzyme"
+            return "Pseudo_Enzyme" if (high_prob or med_prob) else "Non_Enzyme"
         
+        # If it looks like a reaction but it's just transport
+        if is_passive_transport and not (high_prob and not has_binding_site):
+            return "Structural_or_Transport"
+
         if high_prob:
             return "Enzyme"
-        elif med_prob:
+        elif med_prob or has_binding_site:
             return "Suspected_Enzyme"
         
         return "Non_Enzyme"
@@ -71,12 +71,12 @@ class EnzymeClassifier:
 
         return ev_fields, ev_vals
 
-
     def classify_entry(self, entry_data, features):
         """
         Main decision tree. Returns the primary category and a dictionary 
         of exact boolean flags for plotting downstream.
         """
+
         # 1. Base Extractions & Setup
         caution_text = entry_data['text'].get('caution', '').lower()
         is_inactive_text = features.get('is_inactive_text', False) or "inactive" in caution_text or "catalytically dead" in caution_text
@@ -87,31 +87,42 @@ class EnzymeClassifier:
         go_ids = entry_data['lists'].get('go_ids', [])
         catalytic_gos = [go for go in go_ids if go in self.valid_catalytic_go_ids] if self.valid_catalytic_go_ids else []
 
+        enz_dbs = entry_data['lists'].get('enzyme_dbs', [])
+        strict_enz_db = any(db in ["BRENDA", "SABIO-RK"] for db in enz_dbs)
+
         # 2. Probability Tiering
+
+        # High Prob requires strict chemical evidence (EC, Reaction, Rhea, or Strict DB)
         high_prob = any([
             bool(entry_data['lists'].get('ec_numbers')),
-            features.get('has_reaction', False),
-            bool(entry_data['lists'].get('enzyme_dbs')),
-            bool(entry_data['lists'].get('rhea_ids')),
-            bool(catalytic_gos)
+            (features.get('has_reaction') and not features.get('is_passive_transport', False)),
+            strict_enz_db,
+            bool(entry_data['lists'].get('rhea_ids')) 
         ])
 
+
+        # Med Prob relies on text mining, domains, and GO annotations
         med_prob = any([
             features.get('has_active_site', False),
             features.get('has_catalytic_kw', False),
             features.get('has_biosynth_text', False),
-            has_enzyme_name
+            has_enzyme_name,
+            bool(catalytic_gos)
         ])
-        
+
+
         has_binding_site = features.get('has_binding_site', False)
 
-        # 3. Determine Class (Modular call)
+        # 3. Determine Class 
+        # (Only call this ONCE, using the updated signature)
         primary_class = self._determine_primary_class(
             is_inactive=is_inactive_text, 
-            high_prob=high_prob, 
-            med_prob=med_prob, 
-            has_binding_site=has_binding_site
+            high_prob=high_prob,
+            med_prob=med_prob,
+            has_binding_site=has_binding_site,
+            is_passive_transport=features.get('is_passive_transport', False)
         )
+
 
         # 4. Gather Evidence Strings (Modular call)
         ev_fields, ev_vals = self._gather_evidence(
@@ -129,6 +140,7 @@ class EnzymeClassifier:
             "flag_has_reaction": features.get('has_reaction', False),
             "flag_has_experimental": features.get('has_experimental_evidence', False),
             "flag_is_pseudo": (primary_class == "Pseudo_Enzyme"),
+            "flag_is_passive_transport": features.get('is_passive_transport', False), 
             "evidence_field": "|".join(ev_fields) if ev_fields else "None",
             "evidence_value": "|".join(ev_vals) if ev_vals else "None"
         }
