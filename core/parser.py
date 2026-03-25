@@ -180,7 +180,7 @@ class UniprotEntryParser:
         out = {
             'ec_db': [], 'kw_ids': [], 'kw_text': [], 'go_ids': [], 'go_text': [], 'rhea_ids': [],
             'enzyme_dbs': [], 'xref_ensembl': [], 'xref_af': [], 'xref_kegg': [], 
-            'xref_brenda': [], 'xref_reactome': [], 'xref_string': [], 'xref_unipath': [],
+            'xref_brenda': [], 'xref_biocyc': [], 'xref_pathcom': [], 'xref_reactome': [], 'xref_string': [], 'xref_unipath': [],
             'has_experimental': False
         }
         
@@ -197,7 +197,7 @@ class UniprotEntryParser:
             
             if d_type in ["EC", "ENZYME"]: out['ec_db'].append(d_id)
             elif d_type == "Rhea": out['rhea_ids'].append(d_id)
-            elif d_type in ["BRENDA", "SABIO-RK", "BioCyc", "PathwayCommons"]: out['enzyme_dbs'].append(d_id)
+            elif d_type in ["BRENDA", "SABIO-RK"]: out['enzyme_dbs'].append(d_id) # "Reactome", "BioCyc", "PathwayCommons" => NOT ONLY ENZYMES
             elif d_type == "GO":
                 term = child.find(f"{self.ns}property[@type='term']")
                 val = term.get("value", "") if term is not None else ""
@@ -213,6 +213,8 @@ class UniprotEntryParser:
             elif d_type == "Ensembl": out['xref_ensembl'].append(d_id)
             elif d_type == "AlphaFoldDB": out['xref_af'].append(d_id)
             elif d_type == "BRENDA": out['xref_brenda'].append(d_id)
+            elif d_type == "BioCyc": out['xref_biocyc'].append(d_id)
+            elif d_type == "PathwayCommons": out['xref_pathcom'].append(d_id)
             elif d_type == "KEGG": out['xref_kegg'].append(d_id)
             elif d_type == "Reactome": out['xref_reactome'].append(d_id)
             elif d_type == "STRING": out['xref_string'].append(d_id)
