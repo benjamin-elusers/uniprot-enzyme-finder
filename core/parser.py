@@ -276,9 +276,10 @@ class UniprotEntryParser:
                 'kinetics_km': [], 'kinetics_vmax': [], 'kinetics_kcat': []
             },
             'lists': {'substrates': [], 'products': [], 'rhea_ids': []},
-            'has_kinetics': False
+            'has_kinetics': False,
+            'is_passive_transport': None  # FIX: Initialize to None
         }
-        
+
         for c in self.elem.findall(f"{self.ns}comment"):
             ctype = c.get("type")
             text = c.findtext(f"{self.ns}text") or ""
@@ -321,13 +322,17 @@ class UniprotEntryParser:
                     text_eq = reaction.findtext(f"{self.ns}text")
                     if text_eq:
                         res['text']['catalytic_activity'].append(text_eq)
-                        
+
                         # Process sub-reactions for substrates/products and passive transport flags
                         rxn_info = self._process_sub_reactions(text_eq)
                         
-                        # Update passive transport status (only if not already proven active)
-                        if not rxn_info['is_passive_transport']:
+                        if rxn_info['is_passive_transport']:
+                            if res['is_passive_transport'] is None:
+                                res['is_passive_transport'] = True
+                        else:
+                            # If we find ANY active reaction, it is not a purely passive transporter
                             res['is_passive_transport'] = False
+
                         
                         # Extract individual molecules from all sub-reactions
                         for left, right in rxn_info['clean_equations']:
@@ -360,6 +365,9 @@ class UniprotEntryParser:
                         res['text']['kinetics_vmax'].append(f"{t}: {v} {u}" if t else f"{v} {u}")
                     for t in kinetics.findall(f"{self.ns}text"):
                         if t.text and "kcat" in t.text.lower(): res['text']['kinetics_kcat'].append(t.text)
+
+        if res['is_passive_transport'] is None:
+            res['is_passive_transport'] = False
 
         # Join text fields
         for k in res['text']: res['text'][k] = " | ".join(filter(None, res['text'][k]))

@@ -97,7 +97,7 @@ class EnzymeClassifier:
             bool(entry_data['lists'].get('ec_numbers')),
             (features.get('has_reaction') and not features.get('is_passive_transport', False)),
             strict_enz_db,
-            bool(entry_data['lists'].get('rhea_ids')) 
+            (bool(entry_data['lists'].get('rhea_ids')) and not features.get('is_passive_transport', False)) 
         ])
 
 
@@ -109,7 +109,6 @@ class EnzymeClassifier:
             has_enzyme_name,
             bool(catalytic_gos)
         ])
-
 
         has_binding_site = features.get('has_binding_site', False)
 
