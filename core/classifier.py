@@ -24,7 +24,9 @@ class EnzymeClassifier:
 
         if high_prob:
             return "Enzyme"
-        elif med_prob or has_binding_site:
+        
+        # FIX: Require med_prob. Binding sites alone are not enough to suspect an enzyme.
+        elif med_prob: 
             return "Suspected_Enzyme"
         
         return "Non_Enzyme"
@@ -118,7 +120,7 @@ class EnzymeClassifier:
             is_inactive=is_inactive_text, 
             high_prob=high_prob,
             med_prob=med_prob,
-            has_binding_site=has_binding_site,
+            # has_binding_site=has_binding_site, # very weak evidence
             is_passive_transport=features.get('is_passive_transport', False)
         )
 
