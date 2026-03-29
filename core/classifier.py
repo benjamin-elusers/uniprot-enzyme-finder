@@ -14,18 +14,17 @@ class EnzymeClassifier:
             for kw in kws:
                 self.context_kw_map[kw] = category
 
-    def _determine_primary_class(self, is_inactive, high_prob, med_prob, has_binding_site, is_passive_transport):
+    def _determine_primary_class(self, is_inactive, high_prob, med_prob, is_passive_transport): #
         if is_inactive:
             return "Pseudo_Enzyme" if (high_prob or med_prob) else "Non_Enzyme"
         
         # If it looks like a reaction but it's just transport
-        if is_passive_transport and not (high_prob and not has_binding_site):
+        if is_passive_transport and not (high_prob):
             return "Structural_or_Transport"
 
         if high_prob:
             return "Enzyme"
         
-        # FIX: Require med_prob. Binding sites alone are not enough to suspect an enzyme.
         elif med_prob: 
             return "Suspected_Enzyme"
         
@@ -113,14 +112,13 @@ class EnzymeClassifier:
         ])
 
         has_binding_site = features.get('has_binding_site', False)
-
+        
         # 3. Determine Class 
         # (Only call this ONCE, using the updated signature)
         primary_class = self._determine_primary_class(
             is_inactive=is_inactive_text, 
             high_prob=high_prob,
             med_prob=med_prob,
-            # has_binding_site=has_binding_site, # very weak evidence
             is_passive_transport=features.get('is_passive_transport', False)
         )
 
