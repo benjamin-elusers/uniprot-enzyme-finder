@@ -357,14 +357,22 @@ class UniprotEntryParser:
                 kinetics = c.find(f"{self.ns}kinetics")
                 if kinetics is not None:
                     res['has_kinetics'] = True
+                    
+                    # 1. Extract Raw KM
                     for km in kinetics.findall(f"{self.ns}KM"):
-                        v, u, t = km.findtext(f"{self.ns}value", "?"), km.findtext(f"{self.ns}unit", ""), km.findtext(f"{self.ns}text", "")
-                        res['text']['kinetics_km'].append(f"{t}: {v} {u}" if t else f"{v} {u}")
-                    for vm in kinetics.findall(f"{self.ns}Vmax"):
-                        v, u, t = vm.findtext(f"{self.ns}value", "?"), vm.findtext(f"{self.ns}unit", ""), vm.findtext(f"{self.ns}text", "")
-                        res['text']['kinetics_vmax'].append(f"{t}: {v} {u}" if t else f"{v} {u}")
-                    for t in kinetics.findall(f"{self.ns}text"):
-                        if t.text and "kcat" in t.text.lower(): res['text']['kinetics_kcat'].append(t.text)
+                        if km.text:
+                            res['text']['kinetics_km'].append(km.text.strip())
+                            
+                    # 2. Extract Raw Vmax
+                    for vmax in kinetics.findall(f"{self.ns}Vmax"):
+                        if vmax.text:
+                            res['text']['kinetics_vmax'].append(vmax.text.strip())
+                            
+                    # 3. Extract Raw kcat (from generic <text> tags)
+                    for text_node in kinetics.findall(f"{self.ns}text"):
+                        if text_node.text and "kcat" in text_node.text:
+                            res['text']['kinetics_kcat'].append(text_node.text.strip())             
+
 
         if res['is_passive_transport'] is None:
             res['is_passive_transport'] = False
