@@ -14,21 +14,133 @@ class EnzymeClassifier:
             for kw in kws:
                 self.context_kw_map[kw] = category
 
-    def _determine_primary_class(self, is_inactive, high_prob, med_prob, is_passive_transport): #
+    def _parse_kinetic_string(self, text, param_type):
+        """Structurally parses kinetic strings using linguistic pivots and edge-case handlers."""
+        results = []
+        
+        # Pre-processing: Clean PubMed and Linguistic Operators
+        text = re.sub(r'\s*\(PubMed:\d+(?:,\s*PubMed:\d+)*\)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\babout\b', '~', text, flags=re.IGNORECASE)
+        text = re.sub(r'\binferior to\b', '<', text, flags=re.IGNORECASE)
+        
+        if param_type == "kcat":
+            sentences = [s.strip() for s in re.split(r'(?<=[a-zA-Z\)])\.\s+|(?<=[a-zA-Z\)])\.$', text) if s.strip()]
+        else:
+            sentences = [text.strip()]
+            
+        for sentence in sentences:
+            sl = sentence.lower()
+            if param_type == "kcat":
+                if "kcat" not in sl or "kcat/km" in sl or "efficiency" in sl: 
+                    continue 
+
+            ignore_phrases = ["calculations are based", "fold increase", "orders of magnitude", "remains unchanged"]
+            if any(phrase in sl for phrase in ignore_phrases):
+                continue
+
+            # 1a. Handle standard "respectively" (V1 and V2 with S1 and S2)
+            resp_match = re.search(r"(?:(?:kcat|KM|Vmax)\s+(?:is|are|=)\s*)?(.*?)\s+and\s+(.*?)\s+(?:with|for|toward|against)\s+(.*?)\s+and\s+(.*?)\s+as substrates(?:,\s*respectively)?", sentence, flags=re.IGNORECASE)
+            if resp_match:
+                v1, v2, s1, s2 = resp_match.groups()
+                results.append({"value": v1.strip(), "substrate": s1.strip(), "condition": ""})
+                results.append({"value": v2.strip(), "substrate": s2.strip(), "condition": ""})
+                continue
+                
+            # 1b. Handle apparent "respectively" (S1 and S2 is V1 and V2)
+            resp_match_2 = re.search(r"(?:The\s+apparent\s+)?(?:kcat|KM|Vmax)\s+of\s+(.*?)\s+and\s+(.*?)(?:\s+degradation)?\s+(?:is|are|=)\s*(.*?)\s*,?\s*and\s*(.*?)\s*,?\s*respectively", sentence, flags=re.IGNORECASE)
+            if resp_match_2:
+                s1, s2, v1, v2 = resp_match_2.groups()
+                results.append({"value": v1.strip(), "substrate": s1.strip(), "condition": ""})
+                results.append({"value": v2.strip(), "substrate": s2.strip(), "condition": ""})
+                continue
+                
+            # 1c. Handle multi-condition (at pH X is Y, at pH Z is W)
+            multi_cond = re.search(r'^(?:kcat|KM|Vmax)\s+(at\s+pH\s+[\d\.]+)\s+(?:is|are|=)\s*([~<>\s]*[\d\.]+\s*[a-zA-Z\/\-\(\)\d]+)\s*,\s*(at\s+pH\s+[\d\.]+)\s+(?:is|are|=)\s*([~<>\s]*[\d\.]+\s*[a-zA-Z\/\-\(\)\d]+)', sentence, flags=re.IGNORECASE)
+            if multi_cond:
+                c1, v1, c2, v2 = multi_cond.groups()
+                results.append({"value": v1.strip(), "substrate": "", "condition": c1.strip()})
+                results.append({"value": v2.strip(), "substrate": "", "condition": c2.strip()})
+                continue
+
+            # Extract Condition explicitly
+            condition = ""
+            cond_match = re.search(r'\(\s*(in the presence of|at |pH |with |when ).+?\)$', sentence, flags=re.IGNORECASE)
+            if cond_match:
+                condition = cond_match.group(0).strip('()')
+                sentence = sentence[:cond_match.start()].strip() + " " + sentence[cond_match.end():].strip()
+
+            clean_sentence = re.sub(r'^(?:The\s+)?(?:apparent\s+)?(?:kcat|KM|Vmax)\s+(?:is|are|=|of|:)\s+', '', sentence, flags=re.IGNORECASE)
+            clean_sentence = re.sub(r'^(?:The\s+)?(?:apparent\s+)?(?:kcat|KM|Vmax)\s+', '', clean_sentence, flags=re.IGNORECASE).strip()
+
+            # 2. Inverted Syntax (e.g., "for Tryptophan is 1.5 min(-1)")
+            inv_match = re.search(r'^(?:for|toward|with|against)\s+(.+?)\s+(?:is|are|=)\s*(.+)$', clean_sentence, flags=re.IGNORECASE)
+            if inv_match:
+                results.append({"value": inv_match.group(2).strip(), "substrate": inv_match.group(1).strip(), "condition": condition})
+                continue
+
+            # 3. Standard Syntax (e.g., "1.5 uM for Tryptophan")
+            std_match = re.search(r'^(.+?)\s+(for|toward|with|against)\s+(.+)$', clean_sentence, flags=re.IGNORECASE)
+            if std_match:
+                val_unit = std_match.group(1).strip()
+                rest = std_match.group(3).strip()
+                rest = re.sub(r',?\s*as substrates?$', '', rest, flags=re.IGNORECASE)
+                results.append({"value": val_unit, "substrate": rest, "condition": condition})
+                continue
+
+            # 4. Fallback: No pivot word (e.g., just "1.5 min(-1)")
+            val_match = re.match(r'^([~<>\s]*[\d\.,]+(?:[eE][\+\-]?\d+)?(?:x10\^\d+)?)\s*(.*)$', clean_sentence)
+            if val_match:
+                val = val_match.group(1) + (" " + val_match.group(2) if val_match.group(2) else "")
+                results.append({"value": val.strip(), "substrate": "", "condition": condition})
+            else:
+                results.append({"value": sentence, "substrate": "", "condition": condition})
+                
+        return results
+
+    def _determine_primary_class(self, is_inactive, high_prob, med_prob, is_passive_transport, is_putative, has_experimental):
         if is_inactive:
             return "Pseudo_Enzyme" if (high_prob or med_prob) else "Non_Enzyme"
         
         # If it looks like a reaction but it's just transport
-        if is_passive_transport and not (high_prob):
+        if is_passive_transport and not high_prob:
             return "Structural_or_Transport"
 
         if high_prob:
+            # 1. DAS2 Anomaly (Downgrade to Inferred)
+            if is_putative and not has_experimental:
+                return "Inferred_Enzyme"
             return "Enzyme"
         
         elif med_prob: 
             return "Suspected_Enzyme"
         
         return "Non_Enzyme"
+
+    def _determine_confidence_tier(self, primary_class, features, entry_data):
+        """
+        Evaluates the strength of evidence for the classification.
+        Focuses on enzymatic evidence specifically.
+        """
+        # 1. Gold Tier: Direct Experimental Evidence or High-Quality Curation
+        # Note: features['has_experimental_evidence'] should correspond to ECO:0000269 (Manual/Exp)
+        strict_dbs = ["BRENDA", "SABIO-RK", "Rhea", "KEGG"]
+        has_strict_db = any(db in entry_data['lists'].get('enzyme_dbs', []) for db in strict_dbs)
+        has_rhea = bool(entry_data['lists'].get('rhea_ids'))
+        
+        if (features.get('has_experimental_evidence') or has_strict_db or has_rhea) and primary_class == "Enzyme":
+            return "Gold"
+
+        # 2. Silver Tier: Strongly Annotated but not explicitly experimental
+        # Includes proteins with EC numbers or full reaction text but lacks the ECO code/Strict DB cross-ref
+        if primary_class == "Enzyme":
+            return "Silver"
+
+        # 3. Bronze Tier: Homology, Rule-based, or Suspected
+        if primary_class in ["Inferred_Enzyme", "Suspected_Enzyme"]:
+            return "Bronze"
+
+        # Default for Non_Enzyme, Pseudo_Enzyme, or Structural
+        return "Low_or_None"
 
     def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
         """Evaluates entry features and returns explicitly matched evidence fields and values."""
@@ -85,22 +197,44 @@ class EnzymeClassifier:
         protein_name = entry_data['text'].get('protein_name', '')
         has_enzyme_name = bool(ENZYME_NAME_ENDINGS.search(protein_name))
         
+        # New Extractions for DAS2 Anomaly
+        protein_name_lower = protein_name.lower()
+        putative_terms = ['putative', 'probable', 'uncharacterized', 'predicted']
+        is_putative = any(term in protein_name_lower for term in putative_terms)
+        has_experimental = features.get('has_experimental_evidence', False)
+        
+        # Meta info for GRX Anomaly
+        protein_existence = entry_data.get('meta', {}).get('protein_existence', '')
+        
         go_ids = entry_data['lists'].get('go_ids', [])
         catalytic_gos = [go for go in go_ids if go in self.valid_catalytic_go_ids] if self.valid_catalytic_go_ids else []
 
         enz_dbs = entry_data['lists'].get('enzyme_dbs', [])
         strict_enz_db = any(db in ["BRENDA", "SABIO-RK"] for db in enz_dbs)
 
-        # 2. Probability Tiering
 
+        # Parse Kinetics On-the-Fly
+        parsed_kinetics = {'KM': [], 'Vmax': [], 'kcat': []}
+        
+        for p_type, raw_string in [('KM', entry_data['text'].get('kinetics_km', '')), 
+                                   ('Vmax', entry_data['text'].get('kinetics_vmax', '')), 
+                                   ('kcat', entry_data['text'].get('kinetics_kcat', ''))]:
+            if raw_string:
+                for raw_val in raw_string.split(" | "):
+                    if raw_val.strip():
+                        parsed_kinetics[p_type].extend(self._parse_kinetic_string(raw_val.strip(), p_type))
+
+        
+        # 2. Probability Tiering
         # High Prob requires strict chemical evidence (EC, Reaction, Rhea, or Strict DB)
         high_prob = any([
             bool(entry_data['lists'].get('ec_numbers')),
             (features.get('has_reaction') and not features.get('is_passive_transport', False)),
             strict_enz_db,
-            (bool(entry_data['lists'].get('rhea_ids')) and not features.get('is_passive_transport', False)) 
+            (bool(entry_data['lists'].get('rhea_ids')) and not features.get('is_passive_transport', False)),
+            # 2. GRX Anomaly (Upgrade to High Prob)
+            (protein_existence == '1' and features.get('has_active_site', False))
         ])
-
 
         # Med Prob relies on text mining, domains, and GO annotations
         med_prob = any([
@@ -110,20 +244,22 @@ class EnzymeClassifier:
             has_enzyme_name,
             bool(catalytic_gos)
         ])
-
-        has_binding_site = features.get('has_binding_site', False)
         
-        # 3. Determine Class 
-        # (Only call this ONCE, using the updated signature)
+
+        # 3.1 Determine Class 
         primary_class = self._determine_primary_class(
             is_inactive=is_inactive_text, 
             high_prob=high_prob,
             med_prob=med_prob,
-            is_passive_transport=features.get('is_passive_transport', False)
+            is_passive_transport=features.get('is_passive_transport', False),
+            is_putative=is_putative,
+            has_experimental=has_experimental
         )
 
+        # 3.2 Determine Confidence Tier ---
+        confidence_tier = self._determine_confidence_tier(primary_class, features, entry_data)
 
-        # 4. Gather Evidence Strings (Modular call)
+        # 4. Gather Evidence Strings
         ev_fields, ev_vals = self._gather_evidence(
             entry_data=entry_data, 
             features=features, 
@@ -131,13 +267,19 @@ class EnzymeClassifier:
             protein_name=protein_name
         )
 
+
         # 5. Build Stats Flags
+        import json # Ensure json is imported at the top of the file
         stats_flags = {
+            "confidence_tier": confidence_tier,
+            "kinetics_km": json.dumps(parsed_kinetics['KM']) if parsed_kinetics['KM'] else None,
+            "kinetics_vmax": json.dumps(parsed_kinetics['Vmax']) if parsed_kinetics['Vmax'] else None,
+            "kinetics_kcat": json.dumps(parsed_kinetics['kcat']) if parsed_kinetics['kcat'] else None,
             "flag_has_ec": bool(entry_data['lists'].get('ec_numbers')),
             "flag_has_active_site": features.get('has_active_site', False),
             "flag_has_kinetics": features.get('has_kinetics', False),
             "flag_has_reaction": features.get('has_reaction', False),
-            "flag_has_experimental": features.get('has_experimental_evidence', False),
+            "flag_has_experimental": has_experimental,
             "flag_is_pseudo": (primary_class == "Pseudo_Enzyme"),
             "flag_is_passive_transport": features.get('is_passive_transport', False), 
             "evidence_field": "|".join(ev_fields) if ev_fields else "None",
@@ -145,6 +287,7 @@ class EnzymeClassifier:
         }
 
         return primary_class, stats_flags
+
 
     def assign_category(self, kw_ids, ec_numbers, primary_class, has_sec_met_text):
         """
