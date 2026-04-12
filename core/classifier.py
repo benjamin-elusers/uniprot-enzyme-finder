@@ -1,8 +1,10 @@
 # core/classifier.py
 
 import re
+import json
 from config.keywords import FUNCTIONAL_CATEGORIES, EC_CLASSES
 from config.patterns import ENZYME_NAME_ENDINGS
+from config.evidences import ECO_STRICT_EXP, ECO_HTP_EXP, ECO_CURATED, ECO_AUTOMATED
 
 class EnzymeClassifier:
     def __init__(self, valid_catalytic_go_ids=None):
@@ -98,15 +100,15 @@ class EnzymeClassifier:
         return results
 
     def _determine_primary_class(self, is_inactive, high_prob, med_prob, is_passive_transport, is_putative, has_experimental):
+        """Determines the functional identity label independent of confidence."""
         if is_inactive:
             return "Pseudo_Enzyme" if (high_prob or med_prob) else "Non_Enzyme"
         
-        # If it looks like a reaction but it's just transport
+        # Transport reaction (substrates = products)
         if is_passive_transport and not high_prob:
             return "Structural_or_Transport"
 
         if high_prob:
-            # 1. DAS2 Anomaly (Downgrade to Inferred)
             if is_putative and not has_experimental:
                 return "Inferred_Enzyme"
             return "Enzyme"
@@ -116,31 +118,107 @@ class EnzymeClassifier:
         
         return "Non_Enzyme"
 
-    def _determine_confidence_tier(self, primary_class, features, entry_data):
-        """
-        Evaluates the strength of evidence for the classification.
-        Focuses on enzymatic evidence specifically.
-        """
-        # 1. Gold Tier: Direct Experimental Evidence or High-Quality Curation
-        # Note: features['has_experimental_evidence'] should correspond to ECO:0000269 (Manual/Exp)
-        strict_dbs = ["BRENDA", "SABIO-RK", "Rhea", "KEGG"]
-        has_strict_db = any(db in entry_data['lists'].get('enzyme_dbs', []) for db in strict_dbs)
-        has_rhea = bool(entry_data['lists'].get('rhea_ids'))
+    def _calculate_confidence(self, features, entry_data):
+        score = 0
         
-        if (features.get('has_experimental_evidence') or has_strict_db or has_rhea) and primary_class == "Enzyme":
-            return "Gold"
+        # --- PRIMARY ENZYMATIC EVIDENCE (High Weight) ---
+        
+        # 1. Evaluate Exact Catalytic Activity Evidence
+        cat_act_ev = features.get('exp_level_catalytic_activity', 'NONE')
+        if cat_act_ev == "STRICT_EXP": score += 60
+        elif cat_act_ev == "HTP_EXP": score += 40
+        elif cat_act_ev == "CURATED": score += 20
+        elif cat_act_ev == "AUTOMATED": score += 5
 
-        # 2. Silver Tier: Strongly Annotated but not explicitly experimental
-        # Includes proteins with EC numbers or full reaction text but lacks the ECO code/Strict DB cross-ref
-        if primary_class == "Enzyme":
-            return "Silver"
+        # 2. Evaluate Exact EC Number Evidence
+        ec_ev = features.get('exp_level_ec', 'NONE')
+        if ec_ev == "STRICT_EXP": score += 50
+        elif ec_ev == "HTP_EXP": score += 35
+        elif ec_ev == "CURATED": score += 15
+        elif ec_ev == "AUTOMATED": score += 5
+        
+        # 3. Evaluate Exact Catalytic GO Term Evidence (NEW)
+        go_ev = features.get('exp_level_go', 'NONE')
+        if go_ev == "STRICT_EXP": score += 40
+        elif go_ev == "HTP_EXP": score += 25
+        elif go_ev == "CURATED": score += 15
+        elif go_ev == "AUTOMATED": score += 5
 
-        # 3. Bronze Tier: Homology, Rule-based, or Suspected
-        if primary_class in ["Inferred_Enzyme", "Suspected_Enzyme"]:
-            return "Bronze"
+        # 4. Structural & Strict Database Support
+        if any(db in ["BRENDA", "SABIO-RK"] for db in entry_data['lists'].get('enzyme_dbs', [])): 
+            score += 30
+        if bool(entry_data['lists'].get('rhea_ids')): 
+            score += 20
+        if features.get('has_kinetics', False): 
+            score += 25
+        if features.get('has_active_site', False): 
+            score += 15
 
-        # Default for Non_Enzyme, Pseudo_Enzyme, or Structural
-        return "Low_or_None"
+        # --- HOLISTIC PROTEIN QUALITY BOOSTERS (Low Weight) ---
+        pe = entry_data.get('meta', {}).get('protein_existence', '')
+        if pe == '1': score += 10
+        elif pe == '2': score += 5
+        
+        if features.get('has_experimental_evidence', False): score += 10
+        if features.get('has_catalytic_kw', False): score += 10
+
+        # --- TIER ASSIGNMENT ---
+        tier = "Unrated"
+        if score >= 100: tier = "Gold"      
+        elif score >= 50: tier = "Silver" 
+        elif score >= 20: tier = "Bronze"    
+
+        return tier, score
+
+    # def _determine_confidence_tier(self, primary_class, features, entry_data):
+    #     """
+    #     Evaluates the strength of evidence for the classification.
+    #     Focuses on enzymatic evidence specifically.
+    #     """
+    #     # 1. Gold Tier: Direct Experimental Evidence or High-Quality Curation
+    #     # Note: features['has_experimental_evidence'] should correspond to ECO:0000269 (Manual/Exp)
+    #     strict_dbs = ["BRENDA", "SABIO-RK", "Rhea", "KEGG"]
+    #     has_strict_db = any(db in entry_data['lists'].get('enzyme_dbs', []) for db in strict_dbs)
+    #     has_rhea = bool(entry_data['lists'].get('rhea_ids'))
+        
+    #     if (features.get('has_experimental_evidence') or has_strict_db or has_rhea) and primary_class == "Enzyme":
+    #         return "Gold"
+
+    #     # 2. Silver Tier: Strongly Annotated but not explicitly experimental
+    #     # Includes proteins with EC numbers or full reaction text but lacks the ECO code/Strict DB cross-ref
+    #     if primary_class == "Enzyme":
+    #         return "Silver"
+
+    #     # 3. Bronze Tier: Homology, Rule-based, or Suspected
+    #     if primary_class in ["Inferred_Enzyme", "Suspected_Enzyme"]:
+    #         return "Bronze"
+
+    #     # Default for Non_Enzyme, Pseudo_Enzyme, or Structural
+    #     return "Low_or_None"
+
+    def _evaluate_go_evidence(self, go_text_list):
+        """
+        Parses GO annotations and returns the highest evidence tier 
+        specifically for valid catalytic GO terms.
+        """
+        highest_go_ev = "NONE"
+        ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
+        
+        for go_item in go_text_list:
+            parts = go_item.split('|')
+            if len(parts) >= 2:
+                g_id, eco = parts[0], parts[1]
+                if g_id in self.valid_catalytic_go_ids:
+                    level = "NONE"
+                    if eco in ECO_STRICT_EXP: level = "STRICT_EXP"
+                    elif eco in ECO_HTP_EXP: level = "HTP_EXP"
+                    elif eco in ECO_CURATED: level = "CURATED"
+                    elif eco in ECO_AUTOMATED: level = "AUTOMATED"
+                    
+                    if ranks[level] > ranks[highest_go_ev]:
+                        highest_go_ev = level
+                        
+        return highest_go_ev
 
     def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
         """Evaluates entry features and returns explicitly matched evidence fields and values."""
@@ -187,7 +265,7 @@ class EnzymeClassifier:
     def classify_entry(self, entry_data, features):
         """
         Main decision tree. Returns the primary category and a dictionary 
-        of exact boolean flags for plotting downstream.
+        of exact boolean flags/metrics for downstream mapping.
         """
 
         # 1. Base Extractions & Setup
@@ -197,21 +275,23 @@ class EnzymeClassifier:
         protein_name = entry_data['text'].get('protein_name', '')
         has_enzyme_name = bool(ENZYME_NAME_ENDINGS.search(protein_name))
         
-        # New Extractions for DAS2 Anomaly
-        protein_name_lower = protein_name.lower()
+        # Putative terms
         putative_terms = ['putative', 'probable', 'uncharacterized', 'predicted']
-        is_putative = any(term in protein_name_lower for term in putative_terms)
+        is_putative = any(term in protein_name.lower() for term in putative_terms)
         has_experimental = features.get('has_experimental_evidence', False)
         
-        # Meta info for GRX Anomaly
+        # Protein existence
         protein_existence = entry_data.get('meta', {}).get('protein_existence', '')
         
         go_ids = entry_data['lists'].get('go_ids', [])
         catalytic_gos = [go for go in go_ids if go in self.valid_catalytic_go_ids] if self.valid_catalytic_go_ids else []
 
+        go_text_list = entry_data['lists'].get('go_text', [])
+        highest_go_ev = self._evaluate_go_evidence(go_text_list)
+        features['exp_level_go'] = highest_go_ev
+
         enz_dbs = entry_data['lists'].get('enzyme_dbs', [])
         strict_enz_db = any(db in ["BRENDA", "SABIO-RK"] for db in enz_dbs)
-
 
         # Parse Kinetics On-the-Fly
         parsed_kinetics = {'KM': [], 'Vmax': [], 'kcat': []}
@@ -224,19 +304,15 @@ class EnzymeClassifier:
                     if raw_val.strip():
                         parsed_kinetics[p_type].extend(self._parse_kinetic_string(raw_val.strip(), p_type))
 
-        
-        # 2. Probability Tiering
-        # High Prob requires strict chemical evidence (EC, Reaction, Rhea, or Strict DB)
+        # 2. Probability Tiering for Primary Class Label
         high_prob = any([
             bool(entry_data['lists'].get('ec_numbers')),
             (features.get('has_reaction') and not features.get('is_passive_transport', False)),
             strict_enz_db,
             (bool(entry_data['lists'].get('rhea_ids')) and not features.get('is_passive_transport', False)),
-            # 2. GRX Anomaly (Upgrade to High Prob)
             (protein_existence == '1' and features.get('has_active_site', False))
         ])
 
-        # Med Prob relies on text mining, domains, and GO annotations
         med_prob = any([
             features.get('has_active_site', False),
             features.get('has_catalytic_kw', False),
@@ -256,8 +332,12 @@ class EnzymeClassifier:
             has_experimental=has_experimental
         )
 
+        # 3.2 Calculate Decoupled Confidence Tier and Score
+        confidence_tier, confidence_score = self._calculate_confidence(features, entry_data)
+
         # 3.2 Determine Confidence Tier ---
-        confidence_tier = self._determine_confidence_tier(primary_class, features, entry_data)
+        #confidence_tier = self._determine_confidence_tier(primary_class, features, entry_data)
+
 
         # 4. Gather Evidence Strings
         ev_fields, ev_vals = self._gather_evidence(
@@ -272,6 +352,10 @@ class EnzymeClassifier:
         import json # Ensure json is imported at the top of the file
         stats_flags = {
             "confidence_tier": confidence_tier,
+            "confidence_score": confidence_score,
+            "exp_level_catalytic_activity": features.get("exp_level_catalytic_activity", "NONE"),
+            "exp_level_ec": features.get("exp_level_ec", "NONE"),
+            "exp_level_go": highest_go_ev,
             "kinetics_km": json.dumps(parsed_kinetics['KM']) if parsed_kinetics['KM'] else None,
             "kinetics_vmax": json.dumps(parsed_kinetics['Vmax']) if parsed_kinetics['Vmax'] else None,
             "kinetics_kcat": json.dumps(parsed_kinetics['kcat']) if parsed_kinetics['kcat'] else None,
@@ -290,9 +374,7 @@ class EnzymeClassifier:
 
 
     def assign_category(self, kw_ids, ec_numbers, primary_class, has_sec_met_text):
-        """
-        Determines Functional Category (Context).
-        """
+        """Determines Functional Category (Context)."""
         # 1. Secondary Metabolism (Highest Priority)
         if has_sec_met_text: return "Secondary_Metabolism"
         for kw in kw_ids:

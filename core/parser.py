@@ -6,12 +6,13 @@ from config.patterns import (
     EC_NAME_PATTERN, HARD_INACTIVE_PATTERN, SOFT_INACTIVE_PATTERN,
     BIOSYNTH_PATTERN, SEC_MET_PATTERNS
 )
+from config.evidences import ECO_STRICT_EXP, ECO_HTP_EXP, ECO_CURATED, ECO_AUTOMATED
 import logging
 
 class UniprotEntryParser:
     """
     Parses a single UniProt XML entry into a comprehensive dictionary of raw features, 
-    designed to capture all enzymatic, contextual, and structural evidence.
+    designed to capture all enzymatic, contextual, and structural evidence (v20).
     """
     def __init__(self, xml_str):
         self.parser = etree.XMLParser(recover=True)
@@ -24,8 +25,66 @@ class UniprotEntryParser:
         
         m = re.match(r'\{(.*)\}entry', self.elem.tag)
         self.ns = f"{{{m.group(1)}}}" if m else ""
+        
+        self.pubmed_scopes = {}
+        self.evidence_map = {}
+
+    def _build_evidence_dictionaries(self):
+        for ref in self.elem.findall(f"{self.ns}reference"):
+            pubmed_id = None
+            for dbref in ref.findall(f"{self.ns}citation/{self.ns}dbReference"):
+                if dbref.get("type") == "PubMed":
+                    pubmed_id = dbref.get("id")
+                    break
+            
+            if pubmed_id:
+                scopes = [s.text for s in ref.findall(f"{self.ns}scope") if s.text]
+                self.pubmed_scopes[pubmed_id] = scopes
+
+        for ev in self.elem.findall(f"{self.ns}evidence"):
+            ev_key = ev.get("key")
+            ev_type = ev.get("type") 
+            
+            pubmed_id = None
+            source_dbref = ev.find(f"{self.ns}source/{self.ns}dbReference")
+            if source_dbref is not None and source_dbref.get("type") == "PubMed":
+                pubmed_id = source_dbref.get("id")
+
+            if ev_key:
+                self.evidence_map[ev_key] = {
+                    'eco': ev_type,
+                    'pubmed': pubmed_id,
+                    'scopes': self.pubmed_scopes.get(pubmed_id, []) if pubmed_id else []
+                }
+
+    def _evaluate_evidence_level(self, evidence_str):
+        if not evidence_str: return "NONE"
+            
+        keys = evidence_str.split()
+        found_levels = set()
+        
+        for key in keys:
+            ev_data = self.evidence_map.get(key)
+            if not ev_data: continue
+            
+            eco = ev_data['eco']
+            if eco in ECO_STRICT_EXP: return "STRICT_EXP" 
+            elif eco in ECO_HTP_EXP: found_levels.add("HTP_EXP")
+            elif eco in ECO_CURATED: found_levels.add("CURATED")
+            elif eco in ECO_AUTOMATED: found_levels.add("AUTOMATED")
+
+        if "HTP_EXP" in found_levels: return "HTP_EXP"
+        if "CURATED" in found_levels: return "CURATED"
+        if "AUTOMATED" in found_levels: return "AUTOMATED"
+        return "NONE"
+
+    def _max_evidence_level(self, level1, level2):
+        ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
+        return level1 if ranks[level1] > ranks[level2] else level2
 
     def parse(self):
+        self._build_evidence_dictionaries()
+        
         data = {
             'meta': {},
             'features': {},   # Booleans/Flags
@@ -64,8 +123,8 @@ class UniprotEntryParser:
         tax_info = self._extract_organism_and_gene()
         data['text'].update(tax_info)
         
-        # --- 3. Name & Inactive Status ---
-        full_name, name_ecs = self._extract_name()
+        # 3. Name & Inactive Status
+        full_name, name_ecs, name_ec_level = self._extract_name()
         data['text']['protein_name'] = full_name
         data['lists']['ec_from_name'] = name_ecs
         
@@ -80,14 +139,19 @@ class UniprotEntryParser:
         data['features']['has_kinetics'] = comments['has_kinetics']
         data['features']['has_reaction'] = bool(comments['text']['catalytic_activity'])
         data['features']['is_passive_transport'] = comments.get('is_passive_transport', False)
+        data['features']['exp_level_catalytic_activity'] = comments['exp_level_catalytic_activity']
 
         # --- 5. Evidence Scanning (DB Refs, GO, Keywords, Experimental) ---
         refs = self._scan_references()
         for k, v in refs.items():
             if k in data['lists']: data['lists'][k].extend(v)
             elif isinstance(v, list): data['lists'][k] = v
-        data['features']['has_experimental_evidence'] = refs.pop('has_experimental', False)
+            
+        data['features']['has_experimental_evidence'] = refs.pop('has_experimental_evidence', False)
         
+        # Resolve best EC evidence level between names and DBs
+        data['features']['exp_level_ec'] = self._max_evidence_level(name_ec_level, refs.pop('exp_level_db_ec', "NONE"))
+
         # --- 6. Sequence Features (Active Sites, Mutagenesis) ---
         feats = self._extract_seq_features()
         data['lists']['active_sites'] = feats['active_sites']
@@ -102,10 +166,7 @@ class UniprotEntryParser:
 
         # Check caution for inactive relevance
         caution_text = data['text'].get('caution', '').lower()
-        if any(kw in caution_text for kw in ["affinity", "specificity", "activity", "kinetics", "catalysis", "dead", "inactive"]):
-            data['features']['caution_activity_relevance'] = True
-        else:
-            data['features']['caution_activity_relevance'] = False
+        data['features']['cauti1on_activity_relevance'] = any(kw in caution_text for kw in ["affinity", "specificity", "activity", "kinetics", "catalysis", "dead", "inactive"])
 
         # --- 7. Text Mining Flags ---
         combined_text = (
@@ -136,6 +197,8 @@ class UniprotEntryParser:
         protein = self.elem.find(f"{self.ns}protein")
         name = ""
         ecs = []
+        highest_ec_level = "NONE"
+        
         if protein is not None:
             for n_type in ["recommendedName", "submittedName", "alternativeName"]:
                 for group in protein.findall(f"{self.ns}{n_type}"):
@@ -143,8 +206,12 @@ class UniprotEntryParser:
                     if fn is not None and not name: name = fn.text
                     # Extract EC numbers embedded in names
                     for ec in group.findall(f"{self.ns}ecNumber"):
-                        if ec.text: ecs.append(ec.text)
-        return name, ecs
+                        if ec.text: 
+                            ecs.append(ec.text)
+                            level = self._evaluate_evidence_level(ec.get("evidence", ""))
+                            highest_ec_level = self._max_evidence_level(highest_ec_level, level)
+                                
+        return name, ecs, highest_ec_level
 
     def _extract_organism_and_gene(self):
         out = {'organism_name': '', 'organism_id': '', 'lineage': '', 'kingdom': 'Unknown', 'gene_primary': ''}
@@ -182,13 +249,18 @@ class UniprotEntryParser:
             'ec_db': [], 'kw_ids': [], 'kw_text': [], 'go_ids': [], 'go_text': [], 'rhea_ids': [],
             'enzyme_dbs': [], 'xref_ensembl': [], 'xref_af': [], 'xref_kegg': [], 
             'xref_brenda': [], 'xref_biocyc': [], 'xref_pathcom': [], 'xref_reactome': [], 'xref_string': [], 'xref_unipath': [],
-            'has_experimental': False
+            'has_experimental_evidence': False, 'exp_level_db_ec': "NONE"
         }
         
         # Global Evidence for ECO:0000269
         for ev in self.elem.findall(f"{self.ns}evidence"):
              if ev.get("type") == "ECO:0000269":
                  out['has_experimental'] = True
+        
+        for key, ev_data in self.evidence_map.items():
+             if ev_data['eco'] in ECO_STRICT_EXP or ev_data['eco'] in ECO_HTP_EXP:
+                 out['has_experimental_evidence'] = True
+                 break
 
         # Database Cross-References
         for child in self.elem.findall(f"{self.ns}dbReference"):
@@ -196,7 +268,11 @@ class UniprotEntryParser:
             d_id = child.get("id")
             if not d_id: continue
             
-            if d_type in ["EC", "ENZYME"]: out['ec_db'].append(d_id)
+            if d_type in ["EC", "ENZYME"]: 
+                out['ec_db'].append(d_id)
+                level = self._evaluate_evidence_level(child.get("evidence", ""))
+                out['exp_level_db_ec'] = self._max_evidence_level(out['exp_level_db_ec'], level)
+                    
             elif d_type == "Rhea": out['rhea_ids'].append(d_id)
             elif d_type in ["BRENDA", "SABIO-RK"]: out['enzyme_dbs'].append(d_id) # "Reactome", "BioCyc", "PathwayCommons" => NOT ONLY ENZYMES
             elif d_type == "GO":
@@ -210,7 +286,7 @@ class UniprotEntryParser:
 
                 out['go_ids'].append(d_id)
                 if val: out['go_text'].append(f"{d_id}|{eco_code}|{val}")
-                
+            # Other external references (xrefs)    
             elif d_type == "Ensembl": out['xref_ensembl'].append(d_id)
             elif d_type == "AlphaFoldDB": out['xref_af'].append(d_id)
             elif d_type == "BRENDA": out['xref_brenda'].append(d_id)
@@ -247,15 +323,9 @@ class UniprotEntryParser:
         Splits alternative reactions and identifies passive transport.
         """
         sub_rxns = [r.strip() for r in catalytic_text.split('|')]
-        processed_data = {
-            'clean_equations': [],
-            'is_passive_transport': True  # Assume passive until proven otherwise
-        }
-
+        processed_data = {'clean_equations': [], 'is_passive_transport': True}
         for rxn in sub_rxns:
-            if " = " not in rxn:
-                continue
-                
+            if " = " not in rxn: continue
             left, right = rxn.split(" = ", 1)
             
             # Compare cleaned versions to see if chemistry actually changes
@@ -277,7 +347,8 @@ class UniprotEntryParser:
             },
             'lists': {'substrates': [], 'products': [], 'rhea_ids': []},
             'has_kinetics': False,
-            'is_passive_transport': None  # FIX: Initialize to None
+            'is_passive_transport': None,
+            'exp_level_catalytic_activity': "NONE"
         }
 
         for c in self.elem.findall(f"{self.ns}comment"):
@@ -320,6 +391,9 @@ class UniprotEntryParser:
                 reaction = c.find(f"{self.ns}reaction")
                 if reaction is not None:
                     text_eq = reaction.findtext(f"{self.ns}text")
+                    level = self._evaluate_evidence_level(reaction.get("evidence", ""))
+                    res['exp_level_catalytic_activity'] = self._max_evidence_level(res['exp_level_catalytic_activity'], level)
+
                     if text_eq:
                         res['text']['catalytic_activity'].append(text_eq)
 
@@ -327,12 +401,8 @@ class UniprotEntryParser:
                         rxn_info = self._process_sub_reactions(text_eq)
                         
                         if rxn_info['is_passive_transport']:
-                            if res['is_passive_transport'] is None:
-                                res['is_passive_transport'] = True
-                        else:
-                            # If we find ANY active reaction, it is not a purely passive transporter
-                            res['is_passive_transport'] = False
-
+                            if res['is_passive_transport'] is None: res['is_passive_transport'] = True
+                        else: res['is_passive_transport'] = False # Any active reaction
                         
                         # Extract individual molecules from all sub-reactions
                         for left, right in rxn_info['clean_equations']:
@@ -341,16 +411,14 @@ class UniprotEntryParser:
 
                     # Preserved: Extract Rhea IDs from the reaction
                     for dbref in reaction.findall(f"{self.ns}dbReference"):
-                        if dbref.get("type") == "Rhea": 
-                            res['lists']['rhea_ids'].append(dbref.get("id"))
+                        if dbref.get("type") == "Rhea": res['lists']['rhea_ids'].append(dbref.get("id"))
                 
                 # 2. Preserved: Handle Physiological Reactions
                 phys_rxn = c.find(f"{self.ns}physiologicalReaction")
                 if phys_rxn is not None:
                     d_dir = phys_rxn.get("direction", "")
                     for dbref in phys_rxn.findall(f"{self.ns}dbReference"):
-                        if dbref.get("type") == "Rhea": 
-                            res['lists']['rhea_ids'].append(f"{dbref.get('id')}({d_dir})")
+                        if dbref.get("type") == "Rhea": res['lists']['rhea_ids'].append(f"{dbref.get('id')}({d_dir})")
 
             # Kinetics & Biophysicochemical
             elif ctype == "biophysicochemical properties":
@@ -360,24 +428,13 @@ class UniprotEntryParser:
                     
                     # 1. Extract Raw KM
                     for km in kinetics.findall(f"{self.ns}KM"):
-                        if km.text:
-                            res['text']['kinetics_km'].append(km.text.strip())
-                            
-                    # 2. Extract Raw Vmax
+                        if km.text: res['text']['kinetics_km'].append(km.text.strip())
                     for vmax in kinetics.findall(f"{self.ns}Vmax"):
-                        if vmax.text:
-                            res['text']['kinetics_vmax'].append(vmax.text.strip())
-                            
-                    # 3. Extract Raw kcat (from generic <text> tags)
+                        if vmax.text: res['text']['kinetics_vmax'].append(vmax.text.strip())
                     for text_node in kinetics.findall(f"{self.ns}text"):
-                        if text_node.text and "kcat" in text_node.text:
-                            res['text']['kinetics_kcat'].append(text_node.text.strip())             
+                        if text_node.text and "kcat" in text_node.text: res['text']['kinetics_kcat'].append(text_node.text.strip())             
 
-
-        if res['is_passive_transport'] is None:
-            res['is_passive_transport'] = False
-
-        # Join text fields
+        if res['is_passive_transport'] is None: res['is_passive_transport'] = False
         for k in res['text']: res['text'][k] = " | ".join(filter(None, res['text'][k]))
         # Deduplicate lists
         for k in res['lists']: res['lists'][k] = list(set(filter(None, res['lists'][k])))
@@ -396,13 +453,10 @@ class UniprotEntryParser:
                 pos_str = ""
                 if loc is not None:
                     p = loc.find(f"{self.ns}position")
-                    if p is not None: 
-                        pos_str = p.get("position", "")
+                    if p is not None: pos_str = p.get("position", "")
                     else:
                         b, e = loc.find(f"{self.ns}begin"), loc.find(f"{self.ns}end")
-                        if b is not None and e is not None: 
-                            pos_str = f"{b.get('position', '')}..{e.get('position', '')}"
-                
+                        if b is not None and e is not None: pos_str = f"{b.get('position', '')}..{e.get('position', '')}"
                 entry = f"{pos_str}({desc})" if desc else pos_str
                 if ftype == "active site": out['active_sites'].append(entry)
                 elif ftype == "binding site": out['binding_sites'].append(entry)
