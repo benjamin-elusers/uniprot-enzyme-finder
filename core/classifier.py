@@ -348,9 +348,8 @@ class EnzymeClassifier:
         )
 
 
-        # 5. Build Stats Flags
-        import json # Ensure json is imported at the top of the file
-        stats_flags = {
+        # 5. Build Row Metadata 
+        row_metadata = {
             "confidence_tier": confidence_tier,
             "confidence_score": confidence_score,
             "exp_level_catalytic_activity": features.get("exp_level_catalytic_activity", "NONE"),
@@ -370,8 +369,7 @@ class EnzymeClassifier:
             "evidence_value": "|".join(ev_vals) if ev_vals else "None"
         }
 
-        return primary_class, stats_flags
-
+        return primary_class, row_metadata
 
     def assign_category(self, kw_ids, ec_numbers, primary_class, has_sec_met_text):
         """Determines Functional Category (Context)."""

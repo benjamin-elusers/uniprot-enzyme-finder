@@ -5,8 +5,8 @@ import os
 
 # VERSIONING
 UNIPROT_RELEASE = "2026_01"
-FINDER_VERSION = "v15"
-FULL_VERSION = f"{UNIPROT_RELEASE}_{FINDER_VERSION}" # Result: 2026_01_v15
+FINDER_VERSION = "v20"
+FULL_VERSION = f"{UNIPROT_RELEASE}_{FINDER_VERSION}" # Result: 2026_01_v20
 
 # DIRECTORY MANAGEMENT
 # Establish a main output folder and a versioned subfolder
@@ -24,12 +24,14 @@ INPUT_FILES = [
 RAW_DATA_FILE = os.path.join(VERSION_DIR, "uniprot_raw_features.jsonl.gz")
 RAW_DATA_DIR = RAW_DATA_FILE.replace('.jsonl.gz', '_dataset')
 
-STATS_FILE = os.path.join(VERSION_DIR, "uniprot_stats_summary.json")
 FINAL_OUTPUT_FILE = os.path.join(VERSION_DIR, "uniprot_enzymes.parquet")
 
 # CHECKPOINTING
 CHECKPOINT_FILE = os.path.join(VERSION_DIR, f"uniprot_checkpoint_state.json")
 CHECKPOINT_FREQ = 1000 # Save state every 1000 chunks
+
+
+STATS_FILE = os.path.join(VERSION_DIR, "uniprot_stats_summary.json")
 
 # RESOURCES
 OBO_FILE = "data/go-basic.obo"
