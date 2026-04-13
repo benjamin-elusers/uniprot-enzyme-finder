@@ -62,6 +62,7 @@ class UniprotEntryParser:
             
         keys = evidence_str.split()
         found_levels = set()
+        other_ecos = [] # NEW: Track unmapped ECO codes
         
         for key in keys:
             ev_data = self.evidence_map.get(key)
@@ -72,16 +73,34 @@ class UniprotEntryParser:
             elif eco in ECO_HTP_EXP: found_levels.add("HTP_EXP")
             elif eco in ECO_CURATED: found_levels.add("CURATED")
             elif eco in ECO_AUTOMATED: found_levels.add("AUTOMATED")
+            else:
+                other_ecos.append(eco) # Store the unmapped code
 
+        # Resolve the highest mapped level found
         if "HTP_EXP" in found_levels: return "HTP_EXP"
         if "CURATED" in found_levels: return "CURATED"
         if "AUTOMATED" in found_levels: return "AUTOMATED"
+        
+        # If we only found unmapped codes, return it dynamically!
+        if other_ecos:
+            return f"OTHER_{other_ecos[0]}"
+            
         return "NONE"
 
-    def _max_evidence_level(self, level1, level2):
+def _max_evidence_level(self, level1, level2):
         ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
-        return level1 if ranks[level1] > ranks[level2] else level2
-
+        
+        # Safely get the rank. "OTHER_ECO:xxx" will default to 0.
+        r1 = ranks.get(level1, 0)
+        r2 = ranks.get(level2, 0)
+        
+        if r1 > r2: return level1
+        elif r2 > r1: return level2
+        else:
+            # If they are tied (e.g., both are rank 0)
+            # Prefer the exact "OTHER_ECO" string over a generic "NONE"
+            if level1 != "NONE": return level1
+            return level2
     def parse(self):
         self._build_evidence_dictionaries()
         
@@ -90,6 +109,7 @@ class UniprotEntryParser:
             'features': {},   # Booleans/Flags
             'lists': {},      # Lists of IDs and Cross-references
             'text': {}        # Extracted text blocks
+            'evidence_map': self.evidence_map # Dictionary of evidences
         }
 
         # --- 1. Header & Meta Info ---

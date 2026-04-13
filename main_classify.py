@@ -73,7 +73,7 @@ def classify_chunk(lines):
                 non_enz_records.append(record)
 
         except Exception as e:
-            logger.debug(f"Failed to process entry: {e}")
+            logger.error(f"Failed to process entry: {e}")
             
     return enz_records, non_enz_records
 

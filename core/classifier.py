@@ -352,6 +352,7 @@ class EnzymeClassifier:
         row_metadata = {
             "confidence_tier": confidence_tier,
             "confidence_score": confidence_score,
+            "raw_evidence_map": json.dumps(entry_data.get('evidence_map', {})) if entry_data.get('evidence_map') else "{}",
             "exp_level_catalytic_activity": features.get("exp_level_catalytic_activity", "NONE"),
             "exp_level_ec": features.get("exp_level_ec", "NONE"),
             "exp_level_go": highest_go_ev,

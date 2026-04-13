@@ -1,8 +1,17 @@
-# Uniprot Enzyme Scanner ![Version](https://img.shields.io/badge/version-v15-blue)
+# Uniprot Enzyme Scanner ![Version](https://img.shields.io/badge/version-v21-blue)
 
 A robust, memory-safe, three-stage pipeline to extract, classify, and analyze enzymes from massive UniProt XML dumps (Swiss-Prot & TrEMBL). 
 
 This pipeline features automatic state-checkpointing, native PyArrow Parquet dataset generation, and centralized logging to handle datasets well over 150GB with minimal RAM footprint.
+
+
+## Key Features
+* **High-Performance XML Parsing:** Uses `lxml.etree` iterative parsing and multiprocessing to gracefully handle massive (>150GB) XML dumps without blowing out memory.
+* **Tiered Confidence Scoring:** Radically decouples a protein's predicted *Identity* (e.g., `Inferred_Enzyme`) from its Annotation *Confidence* (`Gold`, `Silver`, `Bronze`, and a quantitative `0-100+` score).
+* **Precise Evidence Provenance:** Maps XML `<evidence>` keys to specific ECO ontology codes to accurately distinguish between strict low-throughput manual assays, high-throughput screens, manual curation, and automated electronic inferences.
+* **Dynamic GO Clustering:** A dedicated, lightweight Pandas stage allows you to rapidly map enzymes into high-level functional groups based on GO Slim terms without re-running the heavy XML parser.
+* **Kinetics Parsing:** Uses linguistic pivots to extract `KM`, `Vmax`, and `kcat` directly from free-text comment strings.
+
 
 ## Project Structure
 * **Stage 1 (Extract):** Streams massive XML files using multiprocessing, extracts raw biological features, and outputs a compressed JSONL file. Includes entry-level checkpointing to resume mid-file if interrupted.
@@ -51,7 +60,7 @@ You can manually download the files from the [UniProt FTP Current Release](https
 
 
 This streams the raw XML files and saves the relevant data to output/[VERSION]/uniprot_raw_features.jsonl.gz.
-Time estimate: ~2 hours for full Swiss-Prot + TrEMBL.
+Time estimate: ~3 hours for full Swiss-Prot + TrEMBL.
 
 ```bash
 python main_extract.py # use input files defined in settings.py
@@ -63,17 +72,17 @@ python main_extract.py -i data/uniprot_sprot_2026_01.xml.gz data/uniprot_trembl_
 
 ### Step 2: Classify Enzymes (Run frequently)
 
-This applies the classification logic (Active Sites, Pseudo-enzymes, Confidence scores) and writes natively to a Parquet dataset directory.
-Time estimate: ~5-10 minutes.
+This applies the classification logic (Active Sites, Pseudo-enzymes, Confidence scores...) and writes natively to a Parquet dataset directory.
+Time estimate: ~30-60 minutes.
 
 ```bash
-python main_classify_count.py -i output/2026_01_v15/uniprot_raw_features.jsonl.gz
+python main_classify.py -i output/2026_01_v21/uniprot_raw_features.jsonl.gz
 ```
 
 *If you also want to save the massive dataset of Non-Enzymes, simply add the flag:*
 > 
 ```bash
-python main_classify_count.py -i output/2026_01_v15/uniprot_raw_features.jsonl.gz
+python main_classify.py -i output/2026_01_v21/uniprot_raw_features.jsonl.gz --save_non_enzymes
 ```
 
 ### Step 3: Analyze and Generate Reports
@@ -81,7 +90,7 @@ This utilizes PyArrow to instantly read the Parquet datasets, generating the fin
 
 
 ```bash
-python main_analyze.py -i output/2026_01_v15/uniprot_enzymes_dataset
+python main_analyze.py -i output/2026_01_v21/uniprot_enzymes_dataset
 ```
 
 ### Configuration
@@ -99,14 +108,25 @@ The repository follows this modular structure:
 
 ```text
 uniprot-enzyme-finder/
+│
+├── analysis/                    # R scripts for downstream plotting and analysis
+│   ├── 01_prepare_data.r        # Base data preparation
+│   ├── 02_plot_ec_donut.r       # Visualization scripts (Donuts, Waffles, Dashboards)
+│   ├── ...                      # (Various plot generation scripts)
+│   └── 13_plot_yeast.r          # Species-specific subset analysis
+│
 ├── config/
-│   ├── keywords.py              # Keyword mappings (CATALYTIC_KW_MAP, FUNCTIONAL_CATEGORIES)
-│   ├── patterns.py              # Regex patterns (HARD_INACTIVE, BIOSYNTHESIS)
-│   └── settings.py              # Centralized paths, versioning, and tuning (BATCH_SIZE)
+│   ├── evidences.py             # ECO evidence code hierarchy mapping
+│   ├── go_clusters.py           # GO Slim to Functional Cluster mapping
+│   ├── keywords.py              # UniProt Keyword hierarchical mapping
+│   ├── patterns.py              # Regex patterns for ECs, names, and text-mining
+│   └── settings.py              # Global paths, versioning, and multiprocessing config
+│
 ├── core/
-│   ├── classifier.py            # Main decision tree logic
-│   ├── models.py                # Schema definitions and Parquet record formatting
+│   ├── classifier.py            # Primary classification logic and weighted confidence scoring
+│   ├── models.py                # Flat Parquet Schema definitions
 │   └── parser.py                # Fast lxml-based UniProt XML parsing
+│
 ├── utils/
 │   ├── convert_to_parquet.py    # Legacy/Standalone Parquet converter
 │   ├── download_xml.py          # Auto-downloader for UniProt releases
@@ -114,18 +134,18 @@ uniprot-enzyme-finder/
 │   ├── io.py                    # Streaming (pigz), checkpoints, and queue management
 │   ├── logger.py                # Centralized dual-output logging 
 │   ├── obo_loader.py            # Gene Ontology DAG loader
+│   ├── parse_kinetics_jsonl.py  # Utility to parse kinetics from raw JSONL output
 │   └── stats.py                 # Combinatorial statistics aggregator
 │
 ├── data/*                       # Contain the XML files and the release notes and other resources
 ├── output/                      # Output folder
 │   └── VERSION/*                # Subfolder for each version of the uniprot release
 │
-├── main_extract.py              # Stage 1: Memory-safe XML Extraction
-├── main_classify_count.py       # Stage 2: Classification and Parquet dataset generation
-├── main_analyze.py              # Stage 3: Fast Parquet scanning and reporting
+├── main_extract.py              # Stage 1: Memory-safe XML Extraction to Raw JSONL
+├── main_classify.py             # Stage 2: Fast Parquet Classification (No Aggregation)
+├── main_analyze.py              # Stage 4: Parquet scanning, counting, and reporting
 ├── requirements.txt             # Python dependencies
 └── README.md                    # Project documentation
-
 
 ```
 > (Note: output/ and data/ directories are generated automatically during runtime and are ignored by git).
