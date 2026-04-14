@@ -14,7 +14,7 @@ ECO_STRICT_EXP = {
     "ECO:0000353", # IPI: Inferred from Physical Interaction
     "ECO:0001098", # microscopy evidence
     "ECO:0001115", # fluorescence evidence
-    "ECO:0005504", # spectrometry evidence
+    "ECO:0005504" # spectrometry evidence
 }
 
 # 2. Silver Standard: High-Throughput Experimental
@@ -25,8 +25,7 @@ ECO_HTP_EXP = {
     "ECO:0007001", # HMP: High Throughput Mutant Phenotype
     "ECO:0007003", # HGI: High Throughput Genetic Interaction
     "ECO:0007005", # HDA: High Throughput Direct Assay
-    "ECO:0007007", # HEP: High Throughput Expression Pattern
-    
+    "ECO:0007007" # HEP: High Throughput Expression Pattern 
 }
 
 # 3. Bronze Standard: Manual Curation & Traceable Statements
@@ -55,7 +54,6 @@ ECO_CURATED = {
     "ECO:0007744"
 }
 
- = ECO:0000321
 # 4. Baseline: Electronic / Untraceable
 ECO_AUTOMATED = {
     "ECO:0000213", # EPA: Inferred from computational prediction

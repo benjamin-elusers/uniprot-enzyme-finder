@@ -87,7 +87,7 @@ class UniprotEntryParser:
             
         return "NONE"
 
-def _max_evidence_level(self, level1, level2):
+    def _max_evidence_level(self, level1, level2):
         ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
         
         # Safely get the rank. "OTHER_ECO:xxx" will default to 0.
@@ -101,6 +101,7 @@ def _max_evidence_level(self, level1, level2):
             # Prefer the exact "OTHER_ECO" string over a generic "NONE"
             if level1 != "NONE": return level1
             return level2
+
     def parse(self):
         self._build_evidence_dictionaries()
         
@@ -108,7 +109,7 @@ def _max_evidence_level(self, level1, level2):
             'meta': {},
             'features': {},   # Booleans/Flags
             'lists': {},      # Lists of IDs and Cross-references
-            'text': {}        # Extracted text blocks
+            'text': {},       # Extracted text blocks
             'evidence_map': self.evidence_map # Dictionary of evidences
         }
 
