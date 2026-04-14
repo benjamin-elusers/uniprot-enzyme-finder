@@ -9,16 +9,13 @@ import re
 EC_NAME_PATTERN = re.compile(r"\(EC\s+[\d\.\-n]+\)")
 
 # Strong indicators that the protein is inactive
-HARD_INACTIVE_PATTERN = re.compile(
-    r"\b(inactive|non-catalytic|catalytic-like|pseudo)\b", 
-    re.IGNORECASE
-)
+HARD_INACTIVE_PATTERN = re.compile(r"\b(inactive|non-catalytic|catalytic-like|pseudo)\b", re.IGNORECASE)
 
 # Weaker indicators (could be regulatory)
-SOFT_INACTIVE_PATTERN = re.compile(
-    r"\b(suppressor|inhibitor|regulator)\b", 
-    re.IGNORECASE
-)
+SOFT_INACTIVE_PATTERN = re.compile(r"\b(suppressor|inhibitor|regulator)\b", re.IGNORECASE)
+
+# Putative terms found in name of uncharacterized proteins
+PUTATIVE_TERMS = re.compile(r"\b(putative|probable|uncharacterized|predicted)\b", re.IGNORECASE)
 
 # "Biosynthesis of" often implies the protein IS an enzyme in that pathway
 BIOSYNTH_PATTERN = re.compile(r"\bbiosynthesis of\b", re.IGNORECASE) 
@@ -33,3 +30,5 @@ SEC_MET_PATTERNS = re.compile(
 
 # Names that suggest Enzyme activity even without EC
 ENZYME_NAME_ENDINGS = re.compile(r"(ase|synthase|kinase|transferase)$", re.IGNORECASE)
+
+
