@@ -23,7 +23,26 @@ class UniprotEntryParser:
         
         self.pubmed_scopes = {}
         self.evidence_map = {}
-
+    
+    def _build_evidence_usages(self):
+        """Sweeps the XML tree to find where every evidence key was utilized."""
+        usages = {}
+        for node in self.elem.iter():
+            ev_str = node.get("evidence")
+            if ev_str:
+                tag_name = node.tag.replace(self.ns, '')
+                node_type = node.get('type')
+                
+                # Use the specific 'type' (e.g. 'subcellular location'), fallback to generic tag name
+                annot_name = node_type if node_type else tag_name 
+                
+                for key in ev_str.split():
+                    if key not in usages:
+                        usages[key] = set()
+                    usages[key].add(annot_name)
+                    
+        return {k: " | ".join(sorted(list(v))) for k, v in usages.items()}
+    
     def _build_evidence_dictionaries(self):
         for ref in self.elem.findall(f"{self.ns}reference"):
             pubmed_id = None
@@ -52,75 +71,6 @@ class UniprotEntryParser:
                     'scopes': self.pubmed_scopes.get(pubmed_id, []) if pubmed_id else []
                 }
 
-    def parse(self):
-        self._build_evidence_dictionaries()
-        
-        data = {
-            'meta': {},
-            'features': {},   # Booleans/Flags
-            'lists': {},      # Lists of IDs and Cross-references
-            'text': {},       # Extracted text blocks
-            'evidence_map': self.evidence_map # Dictionary of evidences
-        }
-
-        # --- 1. Header & Meta Info ---
-        data['meta']['accession'] = self._get_text("accession")
-        data['meta']['id'] = self._get_text("name")
-        data['meta']['reviewed'] = (self.elem.get("dataset") == "Swiss-Prot")
-        data['meta']['version'] = self.elem.get("version", "")
-        data['meta']['date_modified'] = self.elem.get("modified", "")
-        data['meta']['date_created'] = self.elem.get("created", "")
-        
-        # Protein Existence (1-5 scale)
-        pe = self.elem.find(f"{self.ns}proteinExistence")
-        pe_level = "1"
-        if pe is not None:
-            pt = pe.get("type")
-            if pt == "evidence at transcript level": pe_level = "2"
-            elif pt == "inferred from homology": pe_level = "3"
-            elif pt == "predicted": pe_level = "4"
-            elif pt == "uncertain": pe_level = "5"
-        data['meta']['protein_existence'] = pe_level
-
-        # Sequence Attributes
-        seq = self.elem.find(f"{self.ns}sequence")
-        data['meta']['length'] = seq.get("length") if seq is not None else "0"
-        data['meta']['mass'] = seq.get("mass") if seq is not None else "0"
-        data['meta']['is_fragment'] = False
-        if seq is not None and 'fragment' in seq.attrib:
-            data['meta']['is_fragment'] = (seq.get("fragment") != "single") 
-
-        # --- 2. Taxonomy & Gene ---
-        tax_info = self._extract_organism_and_gene()
-        data['text'].update(tax_info)
-        
-        # --- 3. Name ---
-        full_name, name_ecs, name_ec_ev_keys = self._extract_name()
-        data['text']['protein_name'] = full_name
-        data['lists']['ec_from_name'] = name_ecs
-        data['text']['name_ec_evidence_keys'] = name_ec_ev_keys
-
-        # --- 4. Comments, Reactions & Kinetics ---
-        comments = self._extract_comments()
-        data['text'].update(comments['text'])
-        data['lists'].update(comments['lists'])
-
-        # --- 5. Database Cross-References ---
-        refs = self._scan_references()
-        for k, v in refs.items():
-            if k in data['lists']: data['lists'][k].extend(v)
-            elif isinstance(v, list): data['lists'][k] = v
-            else: data['text'][k] = v # Catch raw evidence strings
-
-        # --- 6. Sequence Features (Active Sites, Mutagenesis) ---
-        feats = self._extract_seq_features()
-        data['lists']['active_sites'] = feats['active_sites']
-        data['lists']['binding_sites'] = feats['binding_sites']
-        data['lists']['mutagenesis'] = feats['mutagenesis']
-
-        data['lists']['ec_numbers'] = list(set(data['lists'].get('ec_db', []) + data['lists'].get('ec_from_name', [])))
-
-        return data
 
     def _get_text(self, path):
         found = self.elem.find(f"{self.ns}{path}")
@@ -341,6 +291,77 @@ class UniprotEntryParser:
                 elif ftype == "mutagenesis site": out['mutagenesis'].append(entry)
         
         return out
+
+    def parse(self):
+        self._build_evidence_dictionaries()
+        
+        data = {
+            'meta': {},
+            'features': {},   # Booleans/Flags
+            'lists': {},      # Lists of IDs and Cross-references
+            'text': {},       # Extracted text blocks
+            'evidence_map': self.evidence_map, # Dictionary of evidences
+            'evidence_usages': self._build_evidence_usages() # All tags linked to evidences
+        }
+
+        # --- 1. Header & Meta Info ---
+        data['meta']['accession'] = self._get_text("accession")
+        data['meta']['id'] = self._get_text("name")
+        data['meta']['reviewed'] = (self.elem.get("dataset") == "Swiss-Prot")
+        data['meta']['version'] = self.elem.get("version", "")
+        data['meta']['date_modified'] = self.elem.get("modified", "")
+        data['meta']['date_created'] = self.elem.get("created", "")
+        
+        # Protein Existence (1-5 scale)
+        pe = self.elem.find(f"{self.ns}proteinExistence")
+        pe_level = "1"
+        if pe is not None:
+            pt = pe.get("type")
+            if pt == "evidence at transcript level": pe_level = "2"
+            elif pt == "inferred from homology": pe_level = "3"
+            elif pt == "predicted": pe_level = "4"
+            elif pt == "uncertain": pe_level = "5"
+        data['meta']['protein_existence'] = pe_level
+
+        # Sequence Attributes
+        seq = self.elem.find(f"{self.ns}sequence")
+        data['meta']['length'] = seq.get("length") if seq is not None else "0"
+        data['meta']['mass'] = seq.get("mass") if seq is not None else "0"
+        data['meta']['is_fragment'] = False
+        if seq is not None and 'fragment' in seq.attrib:
+            data['meta']['is_fragment'] = (seq.get("fragment") != "single") 
+
+        # --- 2. Taxonomy & Gene ---
+        tax_info = self._extract_organism_and_gene()
+        data['text'].update(tax_info)
+        
+        # --- 3. Name ---
+        full_name, name_ecs, name_ec_ev_keys = self._extract_name()
+        data['text']['protein_name'] = full_name
+        data['lists']['ec_from_name'] = name_ecs
+        data['text']['name_ec_evidence_keys'] = name_ec_ev_keys
+
+        # --- 4. Comments, Reactions & Kinetics ---
+        comments = self._extract_comments()
+        data['text'].update(comments['text'])
+        data['lists'].update(comments['lists'])
+
+        # --- 5. Database Cross-References ---
+        refs = self._scan_references()
+        for k, v in refs.items():
+            if k in data['lists']: data['lists'][k].extend(v)
+            elif isinstance(v, list): data['lists'][k] = v
+            else: data['text'][k] = v # Catch raw evidence strings
+
+        # --- 6. Sequence Features (Active Sites, Mutagenesis) ---
+        feats = self._extract_seq_features()
+        data['lists']['active_sites'] = feats['active_sites']
+        data['lists']['binding_sites'] = feats['binding_sites']
+        data['lists']['mutagenesis'] = feats['mutagenesis']
+        data['lists']['ec_numbers'] = list(set(data['lists'].get('ec_db', []) + data['lists'].get('ec_from_name', [])))
+
+        return data
+
 
 def parse_worker(xml_batch):
     """

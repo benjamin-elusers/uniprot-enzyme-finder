@@ -23,6 +23,59 @@ class EnzymeClassifier:
     #   BIOLOGICAL LOGIC & EVALUATORS 
     # =========================================================================
     
+    def _build_evidence_summary(self, entry_data):
+        """Inverts the XML evidence dictionary into a structured summary table."""
+        evidence_map = entry_data.get('evidence_map', {})
+        evidence_usages = entry_data.get('evidence_usages', {}) # <-- Load global usages
+        if not evidence_map: return "[]"
+            
+        summary = []
+        parsed_keys = {}
+        
+        # 1. Map explicitly tracked enzymatic keys from the parser
+        for k in entry_data['text'].get('name_ec_evidence_keys', '').split():
+            parsed_keys[k] = "EC_from_Name"
+        for k in entry_data['text'].get('db_ec_evidence_keys', '').split():
+            parsed_keys[k] = "EC_Database_Ref"
+        for k in entry_data['text'].get('reaction_evidence_keys', '').split():
+            parsed_keys[k] = "Catalytic_Activity"
+
+        # 2. Add GO Terms explicitly
+        for go_item in entry_data['lists'].get('go_text', []):
+            parts = go_item.split('|')
+            if len(parts) >= 2:
+                g_id, eco = parts[0], parts[1]
+                is_cat = (g_id in self.valid_catalytic_go_ids)
+                summary.append({
+                    "annotation": "GO_Term",
+                    "evidence_key": "N/A",
+                    "evidence_id": g_id,
+                    "code": eco,
+                    "scopes": [],
+                    "is_parsed": is_cat
+                })
+
+        # 3. Process the dictionary with global fallback
+        for ev_key, ev_data in evidence_map.items():
+            if ev_key in parsed_keys:
+                annotation = parsed_keys[ev_key]
+                is_parsed = True
+            else:
+                # Dynamically grab the XML tag/type where this key was used!
+                annotation = evidence_usages.get(ev_key, "Unknown_Feature")
+                is_parsed = False
+            
+            summary.append({
+                "annotation": annotation,
+                "evidence_key": ev_key,
+                "evidence_id": ev_data.get('pubmed', 'N/A'),
+                "code": ev_data.get('eco', ''),
+                "scopes": ev_data.get('scopes', []),
+                "is_parsed": is_parsed
+            })
+            
+        return json.dumps(summary)
+
     def _evaluate_evidence_level(self, evidence_str, evidence_map):
         """Translates raw evidence keys into ECO Tiers."""
         if not evidence_str: return "NONE"
@@ -406,6 +459,7 @@ class EnzymeClassifier:
             "confidence_tier": confidence_tier,
             "confidence_score": confidence_score,
             "raw_evidence_map": json.dumps(evidence_map) if evidence_map else "{}",
+            "detailed_evidence_map": self._build_evidence_summary(entry_data),
             "exp_level_catalytic_activity": features.get("exp_level_catalytic_activity", "NONE"),
             "exp_level_ec": features.get("exp_level_ec", "NONE"),
             "exp_level_go": features.get("exp_level_go", "NONE"),
