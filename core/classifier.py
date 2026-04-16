@@ -291,10 +291,18 @@ def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
     #   SCORING AND CLASSIFICATION
     # =========================================================================
 
-    def _determine_primary_class(self, is_inactive, high_prob, med_prob, is_passive_transport, is_putative, has_catalytic_experiment):
+    def _determine_primary_class(self, is_inactive, high_prob, med_prob, is_passive_transport, is_putative, has_enzyme_exp):
+        """Determines the functional identity label based on probability and experimental validation."""
         if is_inactive: return "Pseudo_Enzyme" if (high_prob or med_prob) else "Non_Enzyme"
         if is_passive_transport and not high_prob: return "Structural_or_Transport"
-        if high_prob: return "Inferred_Enzyme" if (is_putative and not has_catalytic_experiment) else "Enzyme"
+        
+        if high_prob: 
+            # It is INFERRED if it explicitly has a putative name, 
+            # OR if it completely lacks experimental evidence for its enzymatic features.
+            if is_putative or not has_enzyme_exp:
+                return "Inferred_Enzyme"
+            return "Enzyme"
+            
         if med_prob: return "Suspected_Enzyme"
         return "Non_Enzyme"
 
@@ -303,27 +311,45 @@ def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
         cat_act_ev = features.get('catalytic_activity_eco_rk', 'NONE')
         if cat_act_ev == "STRICT_EXP": score += 60
         elif cat_act_ev == "HTP_EXP": score += 40
-        elif cat_act_ev == "CURATED": score += 20
-        elif cat_act_ev == "AUTOMATED": score += 5
+        elif cat_act_ev == "CURATED": score += 30
+        elif cat_act_ev == "AUTOMATED": score += 10
 
         ec_ev = features.get('ec_eco_rk', 'NONE')
         if ec_ev == "STRICT_EXP": score += 50
-        elif ec_ev == "HTP_EXP": score += 35
-        elif ec_ev == "CURATED": score += 15
-        elif ec_ev == "AUTOMATED": score += 5
+        elif ec_ev == "HTP_EXP": score += 30
+        elif ec_ev == "CURATED": score += 20
+        elif ec_ev == "AUTOMATED": score += 10
         
+        # 1. Calculate GO Term Points
         go_ev = features.get('go_term_eco_rk', 'NONE')
-        if go_ev == "STRICT_EXP": score += 40
-        elif go_ev == "HTP_EXP": score += 25
-        elif go_ev == "CURATED": score += 15
-        elif go_ev == "AUTOMATED": score += 5
+        go_points = 0
+        if go_ev == "STRICT_EXP": go_points = 40
+        elif go_ev == "HTP_EXP": go_points = 25
+        elif go_ev == "CURATED": go_points = 10
+        elif go_ev == "AUTOMATED": go_points = 5
 
+        # 2. Calculate Keyword Points
+        kw_ev = features.get('keyword_eco_rk', 'NONE')
+        kw_points = 0
+        if kw_ev == "STRICT_EXP": kw_points = 40
+        elif kw_ev == "HTP_EXP": kw_points = 25
+        elif kw_ev == "CURATED": kw_points = 10
+        elif kw_ev == "AUTOMATED": kw_points = 5
+
+        # 3. Take the MAXIMUM of the two highly correlated features
+        score += max(go_points, kw_points)
+
+        # Optional: Corroboration Bonus
+        # If they BOTH have experimental/curated evidence, give a tiny flat bonus 
+        # to reward the density of the annotation without double-counting the main experiment.
+        if go_points >= 10 and kw_points >= 10:
+            score += 5
+        
         if any(db in ["BRENDA", "SABIO-RK"] for db in entry_data['lists'].get('enzyme_dbs', [])): score += 30
-        if bool(entry_data['lists'].get('rhea_ids')): score += 30
+        if bool(entry_data['lists'].get('rhea_ids')): score += 20
         if features.get('has_kinetics', False): score += 50
         if features.get('has_active_site', False): score += 20
         if features.get('has_experimental_evidence', False): score += 5
-        if features.get('has_catalytic_kw', False): score += 10
 
         if pe == '1': score += 10
         elif pe == '2': score += 5
@@ -333,6 +359,23 @@ def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
         if is_putative: score -= 20
         if pe in ['4', '5']: score -= 15 
         if is_fragment: score -= 10
+
+        # Partial EC Penalty (Averaged for promiscuous/multifunctional enzymes)
+        ec_list = entry_data['lists'].get('ec_numbers', [])
+        if ec_list:
+            total_ec_penalty = 0
+            for ec in ec_list:
+                missing_digits = ec.count("-")
+                if missing_digits == 1:
+                    total_ec_penalty += 5    # e.g., 1.1.1.-
+                elif missing_digits == 2:
+                    total_ec_penalty += 15   # e.g., 1.1.-.-
+                elif missing_digits >= 3:
+                    total_ec_penalty += 25   # e.g., 1.-.-.-
+            
+            # Apply the mean penalty across all functions, rounded to nearest integer
+            average_penalty = round(total_ec_penalty / len(ec_list))
+            score -= average_penalty
 
         tier = "Unrated"
         if score >= 100: tier = "Gold"      
@@ -411,7 +454,15 @@ def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
         features['go_term_eco_rk'], features['go_term_eco_id'] = self._evaluate_go_evidence_extended(go_text_list)
 
         features['has_experimental_evidence'] = any(ev['eco'] in ECO_STRICT_EXP or ev['eco'] in ECO_HTP_EXP for ev in evidence_map.values())
-        features['has_experimental_catalytic'] = (features.get("catalytic_activity_eco_rk") == "STRICT_EXP" or features.get("ec_eco_rk") == "STRICT_EXP")
+        enzymatic_ranks = [
+            features.get('ec_eco_rk'), 
+            features.get('catalytic_activity_eco_rk'), 
+            features.get('go_term_eco_rk'), 
+            features.get('active_site_eco_rk'),
+            features.get('keyword_eco_rk')
+        ]
+        features['has_enzyme_experimental_evidence'] = any(rk in ["STRICT_EXP", "HTP_EXP"] for rk in enzymatic_ranks)
+
 
         features['has_active_site'] = bool(entry_data['lists'].get('active_sites'))
         features['has_kinetics'] = bool(entry_data['text'].get('kinetics_km') or entry_data['text'].get('kinetics_vmax') or entry_data['text'].get('kinetics_kcat'))
@@ -439,7 +490,7 @@ def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
             med_prob=med_prob,
             is_passive_transport=features['is_passive_transport'],
             is_putative=features['is_putative'],
-            has_catalytic_experiment=features['has_experimental_catalytic']
+            has_enzyme_exp=features['has_enzyme_experimental_evidence']
         )
 
         confidence_tier, confidence_score = self._calculate_confidence(
@@ -480,11 +531,13 @@ def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
             "kinetics_vmax": json.dumps(parsed_kinetics['Vmax']) if parsed_kinetics['Vmax'] else None,
             "kinetics_kcat": json.dumps(parsed_kinetics['kcat']) if parsed_kinetics['kcat'] else None,
             "flag_has_ec": bool(ec_num),
+            "flag_is_multifunctional": len(ec_list) > 1,
+            "flag_is_promiscuous": any("-" in ec for ec in ec_list),
             "flag_has_active_site": features['has_active_site'],
             "flag_has_kinetics": features['has_kinetics'],
             "flag_has_reaction": features['has_reaction'],
             "flag_has_experimental": features['has_experimental_evidence'],
-            "flag_has_catalytic_experimental": features['has_experimental_catalytic'],
+            "has_enzyme_experimental_evidence": features['has_enzyme_experimental_evidence'],
             "flag_is_pseudo": (primary_class == "Pseudo_Enzyme"),
             "flag_is_passive_transport": features['is_passive_transport'], 
             "evidence_field": "|".join(ev_fields) if ev_fields else "None",
