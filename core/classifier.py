@@ -233,7 +233,7 @@ class EnzymeClassifier:
                 
         return results
 
-def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
+    def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
         """Gathers evidence using efficient dictionary assignments."""
         lists = entry_data.get('lists', {})
         ev = {}
