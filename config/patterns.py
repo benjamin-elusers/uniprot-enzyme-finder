@@ -32,3 +32,9 @@ SEC_MET_PATTERNS = re.compile(
 ENZYME_NAME_ENDINGS = re.compile(r"(ase|synthase|kinase|transferase)$", re.IGNORECASE)
 
 
+# Reaction cleaners
+TRANSPORT_PATTERN = re.compile(r'\((in|out|external|internal)\)', re.IGNORECASE)
+COMPARTMENT_PATTERN = re.compile(r'\[.*?\]')
+
+# Kinetic cleaners
+PUBMED_CLEAN_PATTERN = re.compile(r'\s*\(PubMed:\d+(?:,\s*PubMed:\d+)*\)', re.IGNORECASE)

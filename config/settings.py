@@ -5,8 +5,8 @@ import os
 
 # VERSIONING
 UNIPROT_RELEASE = "2026_01"
-FINDER_VERSION = "v26"
-FULL_VERSION = f"{UNIPROT_RELEASE}_{FINDER_VERSION}" # Result: 2026_01_v26
+FINDER_VERSION = "v27"
+FULL_VERSION = f"{UNIPROT_RELEASE}_{FINDER_VERSION}" # Result: 2026_01_v27
 
 # DIRECTORY MANAGEMENT
 # Establish a main output folder and a versioned subfolder
@@ -34,7 +34,8 @@ CHECKPOINT_FREQ = 1000 # Save state every 1000 chunks
 STATS_FILE = os.path.join(VERSION_DIR, "uniprot_stats_summary.json")
 
 # RESOURCES
-OBO_FILE = "data/go-basic.obo"
+GO_OBO_FILE = "data/go-basic.obo"
+ECO_OBO_FILE = "data/eco-basic.obo"
 
 # PARSING
 BATCH_SIZE = 5000

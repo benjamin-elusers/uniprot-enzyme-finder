@@ -15,9 +15,9 @@ import pyarrow.parquet as pq
 from core.classifier import EnzymeClassifier
 from core.models import COLUMNS, build_parquet_record
 from utils.io import load_checkpoint, save_checkpoint, chunk_reader, get_estimated_total
-from utils.obo_loader import load_catalytic_go_ids
+from utils.obo_loader import load_catalytic_go_ids, load_eco_definitions
 from utils.logger import setup_logger
-from config.settings import CHECKPOINT_FILE, FINAL_OUTPUT_FILE, VERSION_DIR, OBO_FILE, RAW_DATA_DIR, NUM_WORKERS, BATCH_SIZE
+from config.settings import CHECKPOINT_FILE, FINAL_OUTPUT_FILE, VERSION_DIR, GO_OBO_FILE, ECO_OBO_FILE, RAW_DATA_DIR, NUM_WORKERS, BATCH_SIZE
 
 # =============================================================================
 # WORKER CONTEXT & EXECUTION
@@ -25,9 +25,9 @@ from config.settings import CHECKPOINT_FILE, FINAL_OUTPUT_FILE, VERSION_DIR, OBO
 
 worker_context = {}
 
-def worker_init(valid_go_ids, save_non_enzymes):
+def worker_init(valid_go_ids, eco_ids, save_non_enzymes):
     """Initializes the classifier ONCE per worker process."""
-    worker_context['classifier'] = EnzymeClassifier(valid_catalytic_go_ids=valid_go_ids)
+    worker_context['classifier'] = EnzymeClassifier(valid_catalytic_go_ids=valid_go_ids, eco_defs=eco_ids)
     worker_context['save_non_enzymes'] = save_non_enzymes
 
 def classify_chunk(lines):
@@ -220,13 +220,14 @@ def main():
         return
 
     # 2. Resource Initialization
-    valid_go_ids = load_catalytic_go_ids(OBO_FILE)
+    valid_go_ids = load_catalytic_go_ids(GO_OBO_FILE)
     schema = pa.schema([(col, pa.string()) for col in COLUMNS])
-    
+    eco_ids = load_eco_definitions(ECO_OBO_FILE)
+
     pool = multiprocessing.Pool(
         processes=NUM_WORKERS,
         initializer=worker_init, 
-        initargs=(valid_go_ids, args.save_non_enzymes),
+        initargs=(valid_go_ids, eco_ids, args.save_non_enzymes),
         maxtasksperchild=100
     )
     

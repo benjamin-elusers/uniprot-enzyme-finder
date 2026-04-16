@@ -1,4 +1,4 @@
-# Uniprot Enzyme Scanner ![Version](https://img.shields.io/badge/version-v26-blue)
+# Uniprot Enzyme Scanner ![Version](https://img.shields.io/badge/version-v27-blue)
 
 A robust, memory-safe, three-stage pipeline to extract, classify, and analyze enzymes from massive UniProt XML dumps (Swiss-Prot & TrEMBL). 
 
@@ -76,13 +76,13 @@ This applies the classification logic (Active Sites, Pseudo-enzymes, Confidence 
 Time estimate: ~60-90 minutes.
 
 ```bash
-python main_classify.py -i output/2026_01_v26/uniprot_raw_features.jsonl.gz
+python main_classify.py -i output/2026_01_v27/uniprot_raw_features.jsonl.gz
 ```
 
 *If you also want to save the massive dataset of Non-Enzymes, simply add the flag:*
 > 
 ```bash
-python main_classify.py -i output/2026_01_v26/uniprot_raw_features.jsonl.gz --save_non_enzymes
+python main_classify.py -i output/2026_01_v27/uniprot_raw_features.jsonl.gz --save_non_enzymes
 ```
 
 ### Step 3: Analyze and Generate Reports
@@ -90,7 +90,7 @@ This utilizes PyArrow to instantly read the Parquet datasets, generating the fin
 
 
 ```bash
-python main_analyze.py -i output/2026_01_v26/uniprot_enzymes_dataset
+python main_analyze.py -i output/2026_01_v27/uniprot_enzymes_dataset
 ```
 
 ### Configuration

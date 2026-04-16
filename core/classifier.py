@@ -3,14 +3,12 @@
 import re
 import json
 from config.keywords import FUNCTIONAL_CATEGORIES, EC_CLASSES, CATALYTIC_KW_MAP
-from config.patterns import (
-    EC_NAME_PATTERN, HARD_INACTIVE_PATTERN, SOFT_INACTIVE_PATTERN, PUTATIVE_TERMS,
-    BIOSYNTH_PATTERN, SEC_MET_PATTERNS, ENZYME_NAME_ENDINGS
-)
+import config.patterns as pt
 from config.evidences import ECO_STRICT_EXP, ECO_HTP_EXP, ECO_CURATED, ECO_AUTOMATED
 
+
 class EnzymeClassifier:
-    def __init__(self, valid_catalytic_go_ids=None):
+    def __init__(self, valid_catalytic_go_ids=None, eco_defs=None):
         self.valid_catalytic_go_ids = valid_catalytic_go_ids or set()
         
         # Flatten Context Map for O(1) lookups
@@ -19,12 +17,72 @@ class EnzymeClassifier:
             for kw in kws:
                 self.context_kw_map[kw] = category
 
+        # 2. Build O(1) ECO Tier Lookup Map
+        self.eco_tier_map = {}
+        for eco in ECO_STRICT_EXP: self.eco_tier_map[eco] = "STRICT_EXP"
+        for eco in ECO_HTP_EXP: self.eco_tier_map[eco] = "HTP_EXP"
+        for eco in ECO_CURATED: self.eco_tier_map[eco] = "CURATED"
+        for eco in ECO_AUTOMATED: self.eco_tier_map[eco] = "AUTOMATED"
     # =========================================================================
-    #   BIOLOGICAL LOGIC & EVALUATORS 
+    #   EVIDENCE MAPPING & OBO PARSING
     # =========================================================================
-    
+
+    def _rank_eco_codes(self, eco_codes):
+        """Core logic to rank a list of raw ECO codes and map the OBO definition."""
+        if not eco_codes:
+            return "NONE", "None"
+
+        highest_tier = "NONE"
+        best_eco = None
+        ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
+
+        for eco in eco_codes:
+            level = self.eco_tier_map.get(eco, "OTHER_ECO")
+
+            # OTHER_ECO ranks slightly above NONE (0) but below AUTOMATED (1)
+            r_level = 0.5 if level == "OTHER_ECO" else ranks.get(level, 0)
+            r_highest = 0.5 if highest_tier.startswith("OTHER_ECO") else ranks.get(highest_tier, 0)
+
+            if r_level > r_highest:
+                highest_tier = f"OTHER_{eco}" if level == "OTHER_ECO" else level
+                best_eco = eco
+
+        if highest_tier == "NONE":
+            return "NONE", "None"
+
+        def_str = self.eco_defs.get(best_eco, "No definition found in OBO")
+        return highest_tier, f"{best_eco}: {def_str}"
+
+
+    def _evaluate_keys_evidence(self, keys_list, evidence_map):
+        """Extracts ECO codes from the evidence_map using keys and ranks them."""
+        if not keys_list:
+            return "NONE", "None"
+            
+        # Extract valid ECO codes using list comprehension
+        eco_codes = [
+            evidence_map[key]['eco'] 
+            for key in keys_list if key in evidence_map and 'eco' in evidence_map[key]
+        ]
+        
+        return self._rank_eco_codes(eco_codes)
+
+
+    def _evaluate_go_evidence_extended(self, go_text_list):
+        """Extracts ECO codes from valid catalytic GO terms and ranks them."""
+        eco_codes = []
+        for go_item in go_text_list:
+            parts = go_item.split('|')
+            if len(parts) >= 2:
+                g_id, eco = parts[0], parts[1]
+                if g_id in self.valid_catalytic_go_ids:
+                    eco_codes.append(eco)
+                    
+        return self._rank_eco_codes(eco_codes)
+
+
     def _build_evidence_summary(self, entry_data):
-        """Inverts the XML evidence dictionary into a structured summary table."""
+        """Inverts the XML evidence dictionary into a structured summary JSON array."""
         evidence_map = entry_data.get('evidence_map', {})
         evidence_usages = entry_data.get('evidence_usages', {}) # <-- Load global usages
         if not evidence_map: return "[]"
@@ -76,48 +134,14 @@ class EnzymeClassifier:
             
         return json.dumps(summary)
 
-    def _evaluate_evidence_level(self, evidence_str, evidence_map):
-        """Translates raw evidence keys into ECO Tiers."""
-        if not evidence_str: return "NONE"
-            
-        keys = evidence_str.split()
-        found_levels = set()
-        other_ecos = [] 
-        
-        for key in keys:
-            ev_data = evidence_map.get(key)
-            if not ev_data: continue
-            
-            eco = ev_data['eco']
-            if eco in ECO_STRICT_EXP: return "STRICT_EXP" 
-            elif eco in ECO_HTP_EXP: found_levels.add("HTP_EXP")
-            elif eco in ECO_CURATED: found_levels.add("CURATED")
-            elif eco in ECO_AUTOMATED: found_levels.add("AUTOMATED")
-            else:
-                other_ecos.append(eco) 
-
-        if "HTP_EXP" in found_levels: return "HTP_EXP"
-        if "CURATED" in found_levels: return "CURATED"
-        if "AUTOMATED" in found_levels: return "AUTOMATED"
-        if other_ecos: return f"OTHER_{other_ecos[0]}"
-        return "NONE"
-
-    def _max_evidence_level(self, level1, level2):
-        ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
-
-        r1 = ranks.get(level1, 0)
-        r2 = ranks.get(level2, 0)
-
-        if r1 > r2: return level1
-        elif r2 > r1: return level2
-        else:
-            if level1 != "NONE": return level1
-            return level2
+    # =========================================================================
+    #   TEXT MINING & FEATURE PARSING
+    # =========================================================================
 
     def _clean_chemical_names(self, side_string):
         """ Removes transport/localization/compartment tags like (in), (out), or [cytoplasm]. """
-        cleaned = re.sub(r'\((in|out|external|internal)\)', '', side_string, flags=re.IGNORECASE)
-        cleaned = re.sub(r'\[.*?\]', '', cleaned)
+        cleaned = pt.TRANSPORT_PATTERN.sub('', side_string)
+        cleaned = pt.COMPARTMENT_PATTERN.sub('', cleaned)
         molecules = [m.strip().lower() for m in cleaned.split(' + ')]
         return " + ".join(sorted(filter(None, molecules)))
 
@@ -138,110 +162,94 @@ class EnzymeClassifier:
             res['products'].extend([p.strip() for p in right.split(' + ')])
 
         return res
-
+    
     def _parse_kinetic_string(self, text, param_type):
-        """Structurally parses kinetic strings using linguistic pivots and edge-case handlers."""
         results = []
-        text = re.sub(r'\s*\(PubMed:\d+(?:,\s*PubMed:\d+)*\)', '', text, flags=re.IGNORECASE)
+        
+        # Pre-cleaning
+        text = pt.PUBMED_CLEAN_PATTERN.sub('', text)
         text = re.sub(r'\babout\b', '~', text, flags=re.IGNORECASE)
         text = re.sub(r'\binferior to\b', '<', text, flags=re.IGNORECASE)
         
-        if param_type == "kcat":
-            sentences = [s.strip() for s in re.split(r'(?<=[a-zA-Z\)])\.\s+|(?<=[a-zA-Z\)])\.$', text) if s.strip()]
-        else:
-            sentences = [text.strip()]
-            
+        sentences = [s.strip() for s in re.split(r'(?<=[a-zA-Z\)])\.\s+|(?<=[a-zA-Z\)])\.$', text) if s.strip()] if param_type == "kcat" else [text.strip()]
+        
+        # Helper to format results cleanly
+        def add_res(val, sub="", cond=""):
+            results.append({"value": val.strip(), "substrate": sub.strip(), "condition": cond.strip()})
+
         for sentence in sentences:
             sl = sentence.lower()
-            if param_type == "kcat":
-                if "kcat" not in sl or "kcat/km" in sl or "efficiency" in sl: 
-                    continue 
+            if param_type == "kcat" and ("kcat" not in sl or "kcat/km" in sl or "efficiency" in sl): 
+                continue 
+            if any(p in sl for p in ["calculations are based", "fold increase", "orders of magnitude", "remains unchanged"]): 
+                continue
 
-            ignore_phrases = ["calculations are based", "fold increase", "orders of magnitude", "remains unchanged"]
-            if any(phrase in sl for phrase in ignore_phrases): continue
-
-            resp_match = re.search(r"(?:(?:kcat|KM|Vmax)\s+(?:is|are|=)\s*)?(.*?)\s+and\s+(.*?)\s+(?:with|for|toward|against)\s+(.*?)\s+and\s+(.*?)\s+as substrates(?:,\s*respectively)?", sentence, flags=re.IGNORECASE)
-            if resp_match:
-                v1, v2, s1, s2 = resp_match.groups()
-                results.append({"value": v1.strip(), "substrate": s1.strip(), "condition": ""})
-                results.append({"value": v2.strip(), "substrate": s2.strip(), "condition": ""})
+            # 1. Complex "Respectively" Syntax
+            match = pt.KIN_RESP_1.search(sentence)
+            if match:
+                v1, v2, s1, s2 = match.groups()
+                add_res(v1, s1); add_res(v2, s2)
                 continue
                 
-            resp_match_2 = re.search(r"(?:The\s+apparent\s+)?(?:kcat|KM|Vmax)\s+of\s+(.*?)\s+and\s+(.*?)(?:\s+degradation)?\s+(?:is|are|=)\s*(.*?)\s*,?\s*and\s*(.*?)\s*,?\s*respectively", sentence, flags=re.IGNORECASE)
-            if resp_match_2:
-                s1, s2, v1, v2 = resp_match_2.groups()
-                results.append({"value": v1.strip(), "substrate": s1.strip(), "condition": ""})
-                results.append({"value": v2.strip(), "substrate": s2.strip(), "condition": ""})
+            match = pt.KIN_RESP_2.search(sentence)
+            if match:
+                s1, s2, v1, v2 = match.groups()
+                add_res(v1, s1); add_res(v2, s2)
                 continue
                 
-            multi_cond = re.search(r'^(?:kcat|KM|Vmax)\s+(at\s+pH\s+[\d\.]+)\s+(?:is|are|=)\s*([~<>\s]*[\d\.]+\s*[a-zA-Z\/\-\(\)\d]+)\s*,\s*(at\s+pH\s+[\d\.]+)\s+(?:is|are|=)\s*([~<>\s]*[\d\.]+\s*[a-zA-Z\/\-\(\)\d]+)', sentence, flags=re.IGNORECASE)
-            if multi_cond:
-                c1, v1, c2, v2 = multi_cond.groups()
-                results.append({"value": v1.strip(), "substrate": "", "condition": c1.strip()})
-                results.append({"value": v2.strip(), "substrate": "", "condition": c2.strip()})
+            # 2. Multi-Condition Syntax
+            match = pt.KIN_MULTI_COND.search(sentence)
+            if match:
+                c1, v1, c2, v2 = match.groups()
+                add_res(v1, "", c1); add_res(v2, "", c2)
                 continue
 
+            # 3. Standard Extraction (Condition -> Prefix -> Value/Substrate)
             condition = ""
-            cond_match = re.search(r'\(\s*(in the presence of|at |pH |with |when ).+?\)$', sentence, flags=re.IGNORECASE)
+            cond_match = pt.KIN_COND_EXTRACT.search(sentence)
             if cond_match:
                 condition = cond_match.group(0).strip('()')
                 sentence = sentence[:cond_match.start()].strip() + " " + sentence[cond_match.end():].strip()
 
-            clean_sentence = re.sub(r'^(?:The\s+)?(?:apparent\s+)?(?:kcat|KM|Vmax)\s+(?:is|are|=|of|:)\s+', '', sentence, flags=re.IGNORECASE)
-            clean_sentence = re.sub(r'^(?:The\s+)?(?:apparent\s+)?(?:kcat|KM|Vmax)\s+', '', clean_sentence, flags=re.IGNORECASE).strip()
+            clean_sentence = pt.KIN_PREFIX_1.sub('', sentence)
+            clean_sentence = pt.KIN_PREFIX_2.sub('', clean_sentence).strip()
 
-            inv_match = re.search(r'^(?:for|toward|with|against)\s+(.+?)\s+(?:is|are|=)\s*(.+)$', clean_sentence, flags=re.IGNORECASE)
-            if inv_match:
-                results.append({"value": inv_match.group(2).strip(), "substrate": inv_match.group(1).strip(), "condition": condition})
+            match = pt.KIN_INV.search(clean_sentence)
+            if match:
+                add_res(match.group(2), match.group(1), condition)
                 continue
 
-            std_match = re.search(r'^(.+?)\s+(for|toward|with|against)\s+(.+)$', clean_sentence, flags=re.IGNORECASE)
-            if std_match:
-                val_unit = std_match.group(1).strip()
-                rest = std_match.group(3).strip()
-                rest = re.sub(r',?\s*as substrates?$', '', rest, flags=re.IGNORECASE)
-                results.append({"value": val_unit, "substrate": rest, "condition": condition})
+            match = pt.KIN_STD.search(clean_sentence)
+            if match:
+                add_res(match.group(1), re.sub(r',?\s*as substrates?$', '', match.group(3), flags=re.IGNORECASE), condition)
                 continue
 
-            val_match = re.match(r'^([~<>\s]*[\d\.,]+(?:[eE][\+\-]?\d+)?(?:x10\^\d+)?)\s*(.*)$', clean_sentence)
-            if val_match:
-                val = val_match.group(1) + (" " + val_match.group(2) if val_match.group(2) else "")
-                results.append({"value": val.strip(), "substrate": "", "condition": condition})
+            match = pt.KIN_VAL.search(clean_sentence)
+            if match:
+                val = f"{match.group(1)} {match.group(2)}".strip()
+                add_res(val, "", condition)
             else:
-                results.append({"value": sentence, "substrate": "", "condition": condition})
+                add_res(sentence, "", condition)
                 
         return results
 
-    def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
-        ev_fields, ev_vals = [], []
-        if entry_data['lists'].get('ec_numbers'): 
-            ev_fields.append("EC_Number")
-            ev_vals.append(";".join(entry_data['lists']['ec_numbers']))
-        if features.get('has_reaction'): 
-            ev_fields.append("Reaction_Text")
-            ev_vals.append("Reaction found")
-        if entry_data['lists'].get('enzyme_dbs'): 
-            ev_fields.append("Enzyme_DB")
-            ev_vals.append(";".join(entry_data['lists']['enzyme_dbs']))
-        if entry_data['lists'].get('rhea_ids'): 
-            ev_fields.append("Rhea_ID")
-            ev_vals.append(";".join(entry_data['lists']['rhea_ids']))
-        if catalytic_gos: 
-            ev_fields.append("GO_Catalytic")
-            ev_vals.append(";".join(catalytic_gos))
-        if features.get('has_active_site'): 
-            ev_fields.append("Active_Site")
-            ev_vals.append("Active site annotated")
-        if features.get('has_catalytic_kw'): 
-            ev_fields.append("Keyword_Catalytic")
-            ev_vals.append("Catalytic keyword matched")
-        if protein_name and ENZYME_NAME_ENDINGS.search(protein_name): 
-            ev_fields.append("Protein_Name")
-            ev_vals.append(protein_name)
-        if features.get('has_biosynth_text'): 
-            ev_fields.append("Text_Mining")
-            ev_vals.append("Biosynthesis context")
-        return ev_fields, ev_vals
+def _gather_evidence(self, entry_data, features, catalytic_gos, protein_name):
+        """Gathers evidence using efficient dictionary assignments."""
+        lists = entry_data.get('lists', {})
+        ev = {}
+
+        if ecs := lists.get('ec_numbers'): ev["EC_Number"] = ";".join(ecs)
+        if features.get('has_reaction'): ev["Reaction_Text"] = "Reaction found"
+        if dbs := lists.get('enzyme_dbs'): ev["Enzyme_DB"] = ";".join(dbs)
+        if rheas := lists.get('rhea_ids'): ev["Rhea_ID"] = ";".join(rheas)
+        if catalytic_gos: ev["GO_Catalytic"] = ";".join(catalytic_gos)
+        
+        if features.get('has_active_site'): ev["Active_Site"] = "Active site annotated"
+        if features.get('has_catalytic_kw'): ev["Keyword_Catalytic"] = "Catalytic keyword matched"
+        if protein_name and pt.ENZYME_NAME_ENDINGS.search(protein_name): ev["Protein_Name"] = protein_name
+        if features.get('has_biosynth_text'): ev["Text_Mining"] = "Biosynthesis context"
+
+        return list(ev.keys()), list(ev.values())
 
     def assign_category(self, kw_ids, ec_numbers, primary_class, has_sec_met_text):
         if has_sec_met_text: return "Secondary_Metabolism"
@@ -290,49 +298,21 @@ class EnzymeClassifier:
         if med_prob: return "Suspected_Enzyme"
         return "Non_Enzyme"
 
-    def _evaluate_go_evidence(self, go_text_list):
-        highest_go_ev = "NONE"
-        highest_other = None
-        ranks = {"STRICT_EXP": 4, "HTP_EXP": 3, "CURATED": 2, "AUTOMATED": 1, "NONE": 0}
-        
-        for go_item in go_text_list:
-            parts = go_item.split('|')
-            if len(parts) >= 2:
-                g_id, eco = parts[0], parts[1]
-                if g_id in self.valid_catalytic_go_ids:
-                    level = "NONE"
-                    if eco in ECO_STRICT_EXP: level = "STRICT_EXP"
-                    elif eco in ECO_HTP_EXP: level = "HTP_EXP"
-                    elif eco in ECO_CURATED: level = "CURATED"
-                    elif eco in ECO_AUTOMATED: level = "AUTOMATED"
-                    else:
-                        highest_other = f"OTHER_{eco}"
-                        continue
-                        
-                    if ranks[level] > ranks.get(highest_go_ev, 0): 
-                        highest_go_ev = level
-                        
-        if highest_go_ev == "NONE" and highest_other:
-            return highest_other
-            
-        return highest_go_ev
-
-
     def _calculate_confidence(self, features, entry_data, is_inactive, is_putative, is_fragment, pe):
         score = 0
-        cat_act_ev = features.get('exp_level_catalytic_activity', 'NONE')
+        cat_act_ev = features.get('catalytic_activity_eco_rk', 'NONE')
         if cat_act_ev == "STRICT_EXP": score += 60
         elif cat_act_ev == "HTP_EXP": score += 40
         elif cat_act_ev == "CURATED": score += 20
         elif cat_act_ev == "AUTOMATED": score += 5
 
-        ec_ev = features.get('exp_level_ec', 'NONE')
+        ec_ev = features.get('ec_eco_rk', 'NONE')
         if ec_ev == "STRICT_EXP": score += 50
         elif ec_ev == "HTP_EXP": score += 35
         elif ec_ev == "CURATED": score += 15
         elif ec_ev == "AUTOMATED": score += 5
         
-        go_ev = features.get('exp_level_go', 'NONE')
+        go_ev = features.get('go_term_eco_rk', 'NONE')
         if go_ev == "STRICT_EXP": score += 40
         elif go_ev == "HTP_EXP": score += 25
         elif go_ev == "CURATED": score += 15
@@ -363,29 +343,31 @@ class EnzymeClassifier:
 
     def classify_entry(self, entry_data, features):
         evidence_map = entry_data.get('evidence_map', {})
+        evidence_usages = entry_data.get('evidence_usages', {})
         protein_name = entry_data['text'].get('protein_name', '')
         protein_existence = entry_data.get('meta', {}).get('protein_existence', '')
         is_fragment = entry_data.get('meta', {}).get('is_fragment', False)
         caution_text = entry_data['text'].get('caution', '').lower()
         combined_text = f"{entry_data['text'].get('pathway', '')} {entry_data['text'].get('function', '')} {entry_data['text'].get('catalytic_activity', '')} {protein_name}"
+        
         ec_num = entry_data['lists'].get('ec_numbers', [])
         go_ids = entry_data['lists'].get('go_ids', [])
         go_text_list = entry_data['lists'].get('go_text', [])
         enz_dbs = entry_data['lists'].get('enzyme_dbs', [])
         rhea_ids = entry_data['lists'].get('rhea_ids', [])
 
-        features['has_enzyme_name'] = bool(ENZYME_NAME_ENDINGS.search(protein_name))
-        features['is_inactive_text'] = bool(HARD_INACTIVE_PATTERN.search(protein_name)) or "inactive" in caution_text or "catalytically dead" in caution_text
-        features['is_putative'] = bool(PUTATIVE_TERMS.search(protein_name))
-        features['has_sec_met_text'] = bool(SEC_MET_PATTERNS.search(combined_text))
-        features['has_biosynth_text'] = bool(BIOSYNTH_PATTERN.search(combined_text))
+        features['has_enzyme_name'] = bool(pt.ENZYME_NAME_ENDINGS.search(protein_name))
+        features['is_inactive_text'] = bool(pt.HARD_INACTIVE_PATTERN.search(protein_name)) or "inactive" in caution_text or "catalytically dead" in caution_text
+        features['is_putative'] = bool(pt.PUTATIVE_TERMS.search(protein_name))
+        features['has_sec_met_text'] = bool(pt.SEC_MET_PATTERNS.search(combined_text))
+        features['has_biosynth_text'] = bool(pt.BIOSYNTH_PATTERN.search(combined_text))
         features['caution_activity_relevance'] = any(kw in caution_text for kw in ["affinity", "specificity", "activity", "kinetics", "catalysis", "dead", "inactive"])
 
         kw_ids = entry_data['lists'].get('kw_ids', [])
         features['has_catalytic_kw'] = any(kw in CATALYTIC_KW_MAP for kw in kw_ids)
 
-        if EC_NAME_PATTERN.search(combined_text):
-            found_ecs = EC_NAME_PATTERN.findall(combined_text)
+        if pt.EC_NAME_PATTERN.search(combined_text):
+            found_ecs = pt.EC_NAME_PATTERN.findall(combined_text)
             entry_data['lists']['ec_from_name'].extend([x.strip("()EC ") for x in found_ecs])
             entry_data['lists']['ec_numbers'] = list(set(entry_data['lists'].get('ec_db', []) + entry_data['lists'].get('ec_from_name', [])))
 
@@ -409,20 +391,32 @@ class EnzymeClassifier:
                     if raw_val.strip():
                         parsed_kinetics[p_type].extend(self._parse_kinetic_string(raw_val.strip(), p_type))
 
-        name_ec_ev = self._evaluate_evidence_level(entry_data['text'].get('name_ec_evidence_keys', ''), evidence_map)
-        db_ec_ev = self._evaluate_evidence_level(entry_data['text'].get('db_ec_evidence_keys', ''), evidence_map)
-        features['exp_level_ec'] = self._max_evidence_level(name_ec_ev, db_ec_ev)
-        features['exp_level_catalytic_activity'] = self._evaluate_evidence_level(entry_data['text'].get('reaction_evidence_keys', ''), evidence_map)
-        features['exp_level_go'] = self._evaluate_go_evidence(go_text_list)
+        # --- DYNAMIC EVIDENCE TRACKING ---
+        def get_keys_for_usage(usage_pattern):
+            return [k for k, usages in evidence_usages.items() if usage_pattern.lower() in usages.lower()]
+            
+        feature_key_mappings = {
+            'ec': entry_data['text'].get('name_ec_evidence_keys', '').split() + entry_data['text'].get('db_ec_evidence_keys', '').split(),
+            'catalytic_activity': entry_data['text'].get('reaction_evidence_keys', '').split(),
+            'active_site': get_keys_for_usage("active site"),
+            'cofactor': get_keys_for_usage("cofactor"),
+            'rhea_id': get_keys_for_usage("rhea"),
+            'keyword': get_keys_for_usage("keyword"),
+            'kinetics': get_keys_for_usage("kinetics")
+        }
+        
+        for feat_name, keys in feature_key_mappings.items():
+            features[f'{feat_name}_eco_rk'], features[f'{feat_name}_eco_id'] = self._evaluate_keys_evidence(keys, evidence_map)
+            
+        features['go_term_eco_rk'], features['go_term_eco_id'] = self._evaluate_go_evidence_extended(go_text_list)
 
         features['has_experimental_evidence'] = any(ev['eco'] in ECO_STRICT_EXP or ev['eco'] in ECO_HTP_EXP for ev in evidence_map.values())
-        features['has_experimental_catalytic'] = (features.get("exp_level_catalytic_activity") == "STRICT_EXP" or features.get("exp_level_ec") == "STRICT_EXP")
+        features['has_experimental_catalytic'] = (features.get("catalytic_activity_eco_rk") == "STRICT_EXP" or features.get("ec_eco_rk") == "STRICT_EXP")
 
         features['has_active_site'] = bool(entry_data['lists'].get('active_sites'))
         features['has_kinetics'] = bool(entry_data['text'].get('kinetics_km') or entry_data['text'].get('kinetics_vmax') or entry_data['text'].get('kinetics_kcat'))
 
         strict_enz_db = any(db in ["BRENDA", "SABIO-RK"] for db in enz_dbs)
-
         high_prob = any([
             bool(entry_data['lists'].get('ec_numbers')),
             (features['has_reaction'] and not features['is_passive_transport']),
@@ -435,7 +429,7 @@ class EnzymeClassifier:
             features['has_active_site'],
             features['has_catalytic_kw'],
             features['has_biosynth_text'],
-            bool(ENZYME_NAME_ENDINGS.search(protein_name)),
+            bool(pt.ENZYME_NAME_ENDINGS.search(protein_name)),
             bool(catalytic_gos)
         ])
 
@@ -454,15 +448,34 @@ class EnzymeClassifier:
 
         ev_fields, ev_vals = self._gather_evidence(entry_data, features, catalytic_gos, protein_name)
 
-        # 6. Build Row Metadata (Syntax Fixes Applied)
+        # 6. Build Row Metadata
         row_metadata = {
             "confidence_tier": confidence_tier,
             "confidence_score": confidence_score,
             "raw_evidence_map": json.dumps(evidence_map) if evidence_map else "{}",
             "detailed_evidence_map": self._build_evidence_summary(entry_data),
-            "exp_level_catalytic_activity": features.get("exp_level_catalytic_activity", "NONE"),
-            "exp_level_ec": features.get("exp_level_ec", "NONE"),
-            "exp_level_go": features.get("exp_level_go", "NONE"),
+            
+            "ec_eco_rk": features.get('ec_eco_rk', 'NONE'),
+            "ec_eco_id": features.get('ec_eco_id', 'None'),
+            "catalytic_activity_eco_rk": features.get('catalytic_activity_eco_rk', 'NONE'),
+            "catalytic_activity_eco_id": features.get('catalytic_activity_eco_id', 'None'),
+            "go_term_eco_rk": features.get('go_term_eco_rk', 'NONE'),
+            "go_term_eco_id": features.get('go_term_eco_id', 'None'),
+            "active_site_eco_rk": features.get('active_site_eco_rk', 'NONE'),
+            "active_site_eco_id": features.get('active_site_eco_id', 'None'),
+            "cofactor_eco_rk": features.get('cofactor_eco_rk', 'NONE'),
+            "cofactor_eco_id": features.get('cofactor_eco_id', 'None'),
+            "keyword_eco_rk": features.get('keyword_eco_rk', 'NONE'),
+            "keyword_eco_id": features.get('keyword_eco_id', 'None'),
+            "rhea_id_eco_rk": features.get('rhea_id_eco_rk', 'NONE'),
+            "rhea_id_eco_id": features.get('rhea_id_eco_id', 'None'),
+            "kinetics_eco_rk": features.get('kinetics_eco_rk', 'NONE'),
+            "kinetics_eco_id": features.get('kinetics_eco_id', 'None'),
+            
+            "exp_level_catalytic_activity": features.get("catalytic_activity_eco_rk", "NONE"),
+            "exp_level_ec": features.get("ec_eco_rk", "NONE"),
+            "exp_level_go": features.get("go_term_eco_rk", "NONE"),
+            
             "kinetics_km": json.dumps(parsed_kinetics['KM']) if parsed_kinetics['KM'] else None,
             "kinetics_vmax": json.dumps(parsed_kinetics['Vmax']) if parsed_kinetics['Vmax'] else None,
             "kinetics_kcat": json.dumps(parsed_kinetics['kcat']) if parsed_kinetics['kcat'] else None,

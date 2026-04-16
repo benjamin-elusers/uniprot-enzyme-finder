@@ -36,3 +36,21 @@ def load_catalytic_go_ids(obo_path, root_id="GO:0003824"):
     except Exception as e:
         print(f"[Error] Failed to parse OBO file: {e}")
         return set()
+
+
+def load_eco_definitions(obo_file_path):
+    """Utility to load ECO codes and their definitions from the eco.obo file."""
+    eco_defs = {}
+    try:
+        with open(obo_file_path, 'r', encoding='utf-8') as f:
+            current_id = None
+            for line in f:
+                line = line.strip()
+                if line.startswith("id: ECO:"):
+                    current_id = line[4:]
+                elif line.startswith("name: ") and current_id:
+                    eco_defs[current_id] = line[6:]
+                    current_id = None
+    except Exception as e:
+        print(f"[Warning] Could not load ECO definitions from {obo_file_path}: {e}")
+    return eco_defs
