@@ -10,7 +10,8 @@ from config.evidences import ECO_STRICT_EXP, ECO_HTP_EXP, ECO_CURATED, ECO_AUTOM
 class EnzymeClassifier:
     def __init__(self, valid_catalytic_go_ids=None, eco_defs=None):
         self.valid_catalytic_go_ids = valid_catalytic_go_ids or set()
-        
+        self.eco_defs = eco_defs or {}
+
         # Flatten Context Map for O(1) lookups
         self.context_kw_map = {}
         for category, kws in FUNCTIONAL_CATEGORIES.items():
@@ -531,13 +532,13 @@ class EnzymeClassifier:
             "kinetics_vmax": json.dumps(parsed_kinetics['Vmax']) if parsed_kinetics['Vmax'] else None,
             "kinetics_kcat": json.dumps(parsed_kinetics['kcat']) if parsed_kinetics['kcat'] else None,
             "flag_has_ec": bool(ec_num),
-            "flag_is_multifunctional": len(ec_list) > 1,
-            "flag_is_promiscuous": any("-" in ec for ec in ec_list),
+            "flag_is_multifunctional": len(ec_num) > 1,
+            "flag_is_promiscuous": any("-" in ec for ec in ec_num),
             "flag_has_active_site": features['has_active_site'],
             "flag_has_kinetics": features['has_kinetics'],
             "flag_has_reaction": features['has_reaction'],
             "flag_has_experimental": features['has_experimental_evidence'],
-            "has_enzyme_experimental_evidence": features['has_enzyme_experimental_evidence'],
+            "flag_has_enzyme_experimental_evidence": features['has_enzyme_experimental_evidence'],
             "flag_is_pseudo": (primary_class == "Pseudo_Enzyme"),
             "flag_is_passive_transport": features['is_passive_transport'], 
             "evidence_field": "|".join(ev_fields) if ev_fields else "None",

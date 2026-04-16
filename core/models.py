@@ -23,7 +23,7 @@ COLUMNS = [
     "kinetics_km", "kinetics_vmax", "kinetics_kcat",
     
     # 5. Features & Domains
-    "ft_act_site", "ft_binding", "ft_mutagenesis",
+    "ft_act_site", "ft_binding", "ft_mutagenesiss",
     "caution_activity_relevance",
     
     # 6. Comments (CC)
