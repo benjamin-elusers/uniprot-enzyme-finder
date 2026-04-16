@@ -9,9 +9,14 @@ This pipeline features automatic state-checkpointing, native PyArrow Parquet dat
 * **High-Performance XML Parsing:** Uses `lxml.etree` iterative parsing and multiprocessing to gracefully handle massive (>150GB) XML dumps without blowing out memory.
 * **Tiered Confidence Scoring:** Radically decouples a protein's predicted *Identity* (e.g., `Inferred_Enzyme`) from its Annotation *Confidence* (`Gold`, `Silver`, `Bronze`, and a quantitative `0-100+` score).
 * **Precise Evidence Provenance:** Maps XML `<evidence>` keys to specific ECO ontology codes to accurately distinguish between strict low-throughput manual assays, high-throughput screens, manual curation, and automated electronic inferences.
-* **Dynamic GO Clustering:** A dedicated, lightweight Pandas stage allows you to rapidly map enzymes into high-level functional groups based on GO Slim terms without re-running the heavy XML parser.
 * **Kinetics Parsing:** Uses linguistic pivots to extract `KM`, `Vmax`, and `kcat` directly from free-text comment strings.
 
+
+## Future features
+* **Dynamic GO Clustering:** A dedicated, lightweight Pandas stage allows you to rapidly map enzymes into high-level functional groups based on GO Slim terms without re-running the heavy XML parser.
+* **Integrate DL prediction:** Use state of the art enzyme predictor
+* **Structural evidence:** Use 3d structure clusters from foldseek and multimer predictions to confirm
+* **Benchmarking:** Benchmark enzyme assignment with BRENDA, on S. cerevisiae yeast reference proteome etc...
 
 ## Project Structure
 * **Stage 1 (Extract):** Streams massive XML files using multiprocessing, extracts raw biological features, and outputs a compressed JSONL file. Includes entry-level checkpointing to resume mid-file if interrupted.
@@ -73,7 +78,7 @@ python main_extract.py -i data/uniprot_sprot_2026_01.xml.gz data/uniprot_trembl_
 ### Step 2: Classify Enzymes (Run frequently)
 
 This applies the classification logic (Active Sites, Pseudo-enzymes, Confidence scores...) and writes natively to a Parquet dataset directory.
-Time estimate: ~60-90 minutes.
+Time estimate: ~1-2 hours.
 
 ```bash
 python main_classify.py -i output/2026_01_v27/uniprot_raw_features.jsonl.gz
@@ -117,7 +122,7 @@ uniprot-enzyme-finder/
 │
 ├── config/
 │   ├── evidences.py             # ECO evidence code hierarchy mapping
-│   ├── go_clusters.py           # GO Slim to Functional Cluster mapping
+│   ├── go_clusters.py           # GO Slim to Functional Cluster mapping (in future version >v30)
 │   ├── keywords.py              # UniProt Keyword hierarchical mapping
 │   ├── patterns.py              # Regex patterns for ECs, names, and text-mining
 │   └── settings.py              # Global paths, versioning, and multiprocessing config
