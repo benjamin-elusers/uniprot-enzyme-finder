@@ -38,3 +38,16 @@ COMPARTMENT_PATTERN = re.compile(r'\[.*?\]')
 
 # Kinetic cleaners
 PUBMED_CLEAN_PATTERN = re.compile(r'\s*\(PubMed:\d+(?:,\s*PubMed:\d+)*\)', re.IGNORECASE)
+
+# Kinetics Parsing Patterns
+KIN_RESP_1 = re.compile(r"(?:(?:kcat|KM|Vmax)\s+(?:is|are|=)\s*)?(.*?)\s+and\s+(.*?)\s+(?:with|for|toward|against)\s+(.*?)\s+and\s+(.*?)\s+as substrates(?:,\s*respectively)?", re.IGNORECASE)
+KIN_RESP_2 = re.compile(r"(?:The\s+apparent\s+)?(?:kcat|KM|Vmax)\s+of\s+(.*?)\s+and\s+(.*?)(?:\s+degradation)?\s+(?:is|are|=)\s*(.*?)\s*,?\s*and\s*(.*?)\s*,?\s*respectively", re.IGNORECASE)
+KIN_MULTI_COND = re.compile(r'^(?:kcat|KM|Vmax)\s+(at\s+pH\s+[\d\.]+)\s+(?:is|are|=)\s*([~<>\s]*[\d\.]+\s*[a-zA-Z\/\-\(\)\d]+)\s*,\s*(at\s+pH\s+[\d\.]+)\s+(?:is|are|=)\s*([~<>\s]*[\d\.]+\s*[a-zA-Z\/\-\(\)\d]+)', re.IGNORECASE)
+KIN_COND_EXTRACT = re.compile(r'\(\s*(in the presence of|at |pH |with |when ).+?\)$', re.IGNORECASE)
+
+KIN_PREFIX_1 = re.compile(r'^(?:The\s+)?(?:apparent\s+)?(?:kcat|KM|Vmax)\s+(?:is|are|=|of|:)\s+', re.IGNORECASE)
+KIN_PREFIX_2 = re.compile(r'^(?:The\s+)?(?:apparent\s+)?(?:kcat|KM|Vmax)\s+', re.IGNORECASE)
+
+KIN_INV = re.compile(r'^(?:for|toward|with|against)\s+(.+?)\s+(?:is|are|=)\s*(.+)$', re.IGNORECASE)
+KIN_STD = re.compile(r'^(.+?)\s+(for|toward|with|against)\s+(.+)$', re.IGNORECASE)
+KIN_VAL = re.compile(r'^([~<>\s]*[\d\.,]+(?:[eE][\+\-]?\d+)?(?:x10\^\d+)?)\s*(.*)$')
