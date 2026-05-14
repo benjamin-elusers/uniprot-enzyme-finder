@@ -8,7 +8,7 @@ COLUMNS = [
     "organism_id", "organism_name", "kingdom", "lineage", "gene_primary",
     
     # 2. Classification & Confidence
-    "primary_class", "enzyme_type", 
+    "enzyme_type", 
     "confidence_tier", "confidence_score", 
     
     # 3. EC & Functional Categories
@@ -20,7 +20,7 @@ COLUMNS = [
     
     # 4. Reactions & Kinetics
     "rhea_ids", "reaction_text", "substrates", "products", 
-    "kinetics_km", "kinetics_vmax", "kinetics_kcat",
+    "kinetics_text","kinetics_km", "kinetics_vmax", "kinetics_kcat",
     
     # 5. Features & Domains
     "ft_act_site", "ft_binding", "ft_mutagenesiss",
@@ -56,6 +56,18 @@ COLUMNS = [
     "xref_string", "xref_ensembl", "xref_kegg", "xref_unipathway"
 ]
 
+
+BOOL_COLS = {
+    "reviewed", "fragment", "is_passive_transport", "caution_activity_relevance",
+    "flag_has_ec", "flag_is_multifunctional", "flag_is_promiscuous", "flag_is_pseudo",
+    "flag_has_enzyme_experimental_evidence", 
+    "flag_has_reaction", "flag_has_kinetics", "flag_has_active_site", 
+    "flag_has_experimental", 
+}
+
+INT_COLS = { "length", "confidence_score"}
+
+
 def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp, row_metadata):
     meta = entry.get('meta', {})
     text = entry.get('text', {})
@@ -66,10 +78,10 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "accession": meta.get('accession', ''),
         "id": meta.get('id', ''),
         "protein_name": text.get('protein_name', ''),
-        "reviewed": "true" if meta.get('reviewed') else "false",
+        "reviewed": bool(meta.get('reviewed',False)),
         "protein_existence": meta.get('protein_existence', ''),
-        "length": meta.get('length', '0'),
-        "fragment": "true" if meta.get('is_fragment') else "false",
+        "length": int(meta.get('length', -1)),
+        "fragment": bool(meta.get('is_fragment',False)),
         "version": meta.get('version', ''),
         "date_modified": meta.get('date_modified', ''),
         "date_created": meta.get('date_created', ''),
@@ -79,10 +91,9 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "lineage": text.get('lineage', ''),
         "gene_primary": text.get('gene_primary', ''),
         
-        "primary_class": primary_class,
         "enzyme_type": primary_class, 
         "confidence_tier": row_metadata.get("confidence_tier", "Unrated"),
-        "confidence_score": str(row_metadata.get("confidence_score", 0)), 
+        "confidence_score": int(row_metadata.get("confidence_score", 0)),
         
         "ec": ";".join(lists.get('ec_db', [])),
         "ec_from_name": ";".join(lists.get('ec_from_name', [])),
@@ -92,7 +103,7 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "ec_completeness": comp,
 
         "functional_category": cat, 
-        "is_passive_transport": str(row_metadata.get("flag_is_passive_transport", False)).upper(),
+        "is_passive_transport": bool(row_metadata.get("flag_is_passive_transport", False)),
         "keyword": ";".join(lists.get('kw_text', lists.get('kw_ids', []))),
         "go_term": ";".join(lists.get('go_text', lists.get('go_ids', []))),
         
@@ -100,14 +111,16 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "reaction_text": text.get('catalytic_activity', ''),
         "substrates": "||".join(lists.get('substrates', [])),
         "products": "||".join(lists.get('products', [])),
-        "kinetics_km": row_metadata.get("kinetics_km") or "",
-        "kinetics_vmax": row_metadata.get("kinetics_vmax") or "",
-        "kinetics_kcat": row_metadata.get("kinetics_kcat") or "",
+        "kinetics_text": ";".join([text.get('kinetics_km', ''),text.get('kinetics_vmax', ''),text.get('kinetics_kcat', '')]),
+        "kinetics_km": row_metadata.get("kinetics_km",''),
+        "kinetics_vmax": row_metadata.get("kinetics_vmax",''),
+        "kinetics_kcat": row_metadata.get("kinetics_kcat",''),
         
         "ft_act_site": ";".join(lists.get('active_sites', [])),
         "ft_binding": ";".join(lists.get('binding_sites', [])),
         "ft_mutagenesis": ";".join(lists.get('mutagenesis', [])),
-        "caution_activity_relevance": "true" if feats.get('caution_activity_relevance') else "false",
+        "caution_activity_relevance": bool(feats.get('caution_activity_relevance',False)),
+
         
         "cc_catalytic_activity": text.get('catalytic_activity', ''),
         "cc_cofactor": text.get('cofactor', ''),
@@ -144,15 +157,15 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "kinetics_eco_rk": row_metadata.get("kinetics_eco_rk", "NONE"),
         "kinetics_eco_id": row_metadata.get("kinetics_eco_id", "None"),
 
-        "flag_has_ec": str(row_metadata.get("flag_has_ec", False)).upper(),
-        "flag_is_multifunctional": str(row_metadata.get("flag_is_multifunctional", False)).upper(),
-        "flag_is_promiscuous": str(row_metadata.get("flag_is_promiscuous", False)).upper(),
-        "flag_is_pseudo": str(row_metadata.get("flag_is_pseudo", False)).upper(),
-        "flag_has_enzyme_experimental_evidence": str(row_metadata.get("flag_has_enzyme_experimental_evidence", False)).upper(),
-        "flag_has_reaction": str(row_metadata.get("flag_has_reaction", False)).upper(),
-        "flag_has_kinetics": str(row_metadata.get("flag_has_kinetics", False)).upper(),
-        "flag_has_active_site": str(row_metadata.get("flag_has_active_site", False)).upper(),
-        "flag_has_experimental": str(row_metadata.get("flag_has_experimental", False)).upper(),
+        "flag_has_ec": bool(row_metadata.get("flag_has_ec", False)),
+        "flag_is_multifunctional": bool(row_metadata.get("flag_is_multifunctional", False)),
+        "flag_is_promiscuous": bool(row_metadata.get("flag_is_promiscuous", False)),
+        "flag_is_pseudo": bool(row_metadata.get("flag_is_pseudo", False)),
+        "flag_has_enzyme_experimental_evidence": bool(row_metadata.get("flag_has_enzyme_experimental_evidence", False)),
+        "flag_has_reaction": bool(row_metadata.get("flag_has_reaction", False)),
+        "flag_has_kinetics": bool(row_metadata.get("flag_has_kinetics", False)),
+        "flag_has_active_site": bool(row_metadata.get("flag_has_active_site", False)),
+        "flag_has_experimental": bool(row_metadata.get("flag_has_experimental", False)),
         
         "xref_alphafolddb": ";".join(lists.get('xref_af', [])),
         "xref_brenda": ";".join(lists.get('xref_brenda', [])),

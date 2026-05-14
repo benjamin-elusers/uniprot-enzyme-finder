@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from core.classifier import EnzymeClassifier
-from core.models import COLUMNS, build_parquet_record
+from core.models import COLUMNS, BOOL_COLS, INT_COLS, build_parquet_record, 
 from utils.io import load_checkpoint, save_checkpoint, chunk_reader, get_estimated_total
 from utils.obo_loader import load_catalytic_go_ids, load_eco_definitions
 from utils.logger import setup_logger
@@ -221,7 +221,19 @@ def main():
 
     # 2. Resource Initialization
     valid_go_ids = load_catalytic_go_ids(GO_OBO_FILE)
-    schema = pa.schema([(col, pa.string()) for col in COLUMNS])
+
+
+    # 2. Build the correct schema dynamically
+    schema_fields = []
+    for col in COLUMNS:
+        if col in BOOL_COLS:
+            schema_fields.append((col, pa.bool_()))
+        elif col in INT_COLS:
+            schema_fields.append((col, pa.int32()))
+        else:
+            schema_fields.append((col, pa.string()))
+    schema = pa.schema(schema_fields)
+    #schema = pa.schema([(col, pa.string()) for col in COLUMNS])
     eco_ids = load_eco_definitions(ECO_OBO_FILE)
 
     pool = multiprocessing.Pool(
