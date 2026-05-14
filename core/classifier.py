@@ -124,15 +124,23 @@ class EnzymeClassifier:
                 annotation = evidence_usages.get(ev_key, "Unknown_Feature")
                 is_parsed = False
             
+            # Smart Evidence ID formatting
+            if ev_data.get('pubmed'):
+                final_ev_id = f"PubMed:{ev_data.get('pubmed')}"
+            elif ev_data.get('source_type') and ev_data.get('source_id'):
+                final_ev_id = f"{ev_data.get('source_type')}:{ev_data.get('source_id')}"
+            else:
+                final_ev_id = "N/A"
+                
             summary.append({
                 "annotation": annotation,
                 "evidence_key": ev_key,
-                "evidence_id": ev_data.get('pubmed', 'N/A'),
+                "evidence_id": final_ev_id,
                 "code": ev_data.get('eco', ''),
                 "scopes": ev_data.get('scopes', []),
                 "is_parsed": is_parsed
             })
-            
+
         return json.dumps(summary)
 
     # =========================================================================

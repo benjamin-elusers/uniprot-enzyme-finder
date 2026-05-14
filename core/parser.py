@@ -44,6 +44,7 @@ class UniprotEntryParser:
         return {k: " | ".join(sorted(list(v))) for k, v in usages.items()}
     
     def _build_evidence_dictionaries(self):
+        # 1. Extract Scopes from References 
         for ref in self.elem.findall(f"{self.ns}reference"):
             pubmed_id = None
             for dbref in ref.findall(f"{self.ns}citation/{self.ns}dbReference"):
@@ -55,19 +56,30 @@ class UniprotEntryParser:
                 scopes = [s.text for s in ref.findall(f"{self.ns}scope") if s.text]
                 self.pubmed_scopes[pubmed_id] = scopes
 
+        # 2. Extract Evidence Codes and Sources
         for ev in self.elem.findall(f"{self.ns}evidence"):
             ev_key = ev.get("key")
             ev_type = ev.get("type") 
             
             pubmed_id = None
+            source_type = None
+            source_id = None
+            
+            # Find the source of the evidence
             source_dbref = ev.find(f"{self.ns}source/{self.ns}dbReference")
-            if source_dbref is not None and source_dbref.get("type") == "PubMed":
-                pubmed_id = source_dbref.get("id")
+            if source_dbref is not None:
+                source_type = source_dbref.get("type")
+                source_id = source_dbref.get("id")
+                # Explicitly flag if it is PubMed
+                if source_type == "PubMed":
+                    pubmed_id = source_id
 
             if ev_key:
                 self.evidence_map[ev_key] = {
                     'eco': ev_type,
-                    'pubmed': pubmed_id,
+                    'pubmed': pubmed_id,           # Kept strictly for PubMed IDs
+                    'source_type': source_type,    # e.g., "EMBL", "SAM", "PubMed"
+                    'source_id': source_id,        # e.g., "OUO02632.1", "Phobius"
                     'scopes': self.pubmed_scopes.get(pubmed_id, []) if pubmed_id else []
                 }
 
