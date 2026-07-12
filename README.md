@@ -1,4 +1,4 @@
-# Uniprot Enzyme Scanner ![Version](https://img.shields.io/badge/version-v28-blue)
+# Uniprot Enzyme Scanner ![Version](https://img.shields.io/badge/version-v29-blue)
 
 A robust, memory-safe, three-stage pipeline to extract, classify, and analyze enzymes from massive UniProt XML dumps (Swiss-Prot & TrEMBL). 
 
@@ -81,13 +81,13 @@ This applies the classification logic (Active Sites, Pseudo-enzymes, Confidence 
 Time estimate: ~1-2 hours.
 
 ```bash
-python main_classify.py -i output/2026_01_v28/uniprot_raw_features.jsonl.gz
+python main_classify.py -i output/2026_01_v29/uniprot_raw_features.jsonl.gz
 ```
 
 *If you also want to save the massive dataset of Non-Enzymes, simply add the flag:*
 > 
 ```bash
-python main_classify.py -i output/2026_01_v28/uniprot_raw_features.jsonl.gz --save_non_enzymes
+python main_classify.py -i output/2026_01_v29/uniprot_raw_features.jsonl.gz --save_non_enzymes
 ```
 
 ### Step 3: Analyze and Generate Reports
@@ -95,7 +95,7 @@ This utilizes PyArrow to instantly read the Parquet datasets, generating the fin
 
 
 ```bash
-python main_analyze.py -i output/2026_01_v28/uniprot_enzymes_dataset
+python main_analyze.py -i output/2026_01_v29/uniprot_enzymes_dataset
 ```
 
 ### Configuration
@@ -144,7 +144,7 @@ uniprot-enzyme-finder/
 │
 ├── data/*                       # Contain the XML files and the release notes and other resources
 ├── output/                      # Output folder
-│   └── VERSION/*                # Subfolder for each version of the uniprot release
+│   └── VERSION/*                # Subfolder for each version of the uniprot release (+ version of pipeline)
 │
 ├── main_extract.py              # Stage 1: Memory-safe XML Extraction to Raw JSONL
 ├── main_classify.py             # Stage 2: Fast Parquet Classification (No Aggregation)
