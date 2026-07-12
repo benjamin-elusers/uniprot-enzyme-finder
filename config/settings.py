@@ -5,8 +5,8 @@ import os
 
 # VERSIONING
 UNIPROT_RELEASE = "2026_01"
-FINDER_VERSION = "v28"
-FULL_VERSION = f"{UNIPROT_RELEASE}_{FINDER_VERSION}" # Result: 2026_01_v28
+FINDER_VERSION = "v29"
+FULL_VERSION = f"{UNIPROT_RELEASE}_{FINDER_VERSION}" # Result: 2026_01_v29
 
 # DIRECTORY MANAGEMENT
 # Establish a main output folder and a versioned subfolder

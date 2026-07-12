@@ -50,6 +50,7 @@ COLUMNS = [
     "flag_has_enzyme_experimental_evidence", 
     "flag_has_reaction", "flag_has_kinetics", "flag_has_active_site", 
     "flag_has_experimental", 
+    "flag_has_catalytic_domain", "flag_is_regulatory", "flag_has_pdb"     
     
     # 10. Cross-References
     "xref_alphafolddb", "xref_brenda", "xref_reactome", 
@@ -166,7 +167,10 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "flag_has_kinetics": bool(row_metadata.get("flag_has_kinetics", False)),
         "flag_has_active_site": bool(row_metadata.get("flag_has_active_site", False)),
         "flag_has_experimental": bool(row_metadata.get("flag_has_experimental", False)),
-        
+        "flag_has_catalytic_domain": bool(row_metadata.get("flag_has_catalytic_domain", False)),
+        "flag_is_regulatory": bool(row_metadata.get("flag_is_regulatory", False)),
+        "flag_has_pdb": bool(row_metadata.get("flag_has_pdb", False)),
+
         "xref_alphafolddb": ";".join(lists.get('xref_af', [])),
         "xref_brenda": ";".join(lists.get('xref_brenda', [])),
         "xref_reactome": ";".join(lists.get('xref_reactome', [])),

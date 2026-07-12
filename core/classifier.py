@@ -250,12 +250,23 @@ class EnzymeClassifier:
         if ecs := lists.get('ec_numbers'): ev["EC_Number"] = ";".join(ecs)
         if features.get('has_reaction'): ev["Reaction_Text"] = "Reaction found"
         if dbs := lists.get('enzyme_dbs'): ev["Enzyme_DB"] = ";".join(dbs)
+
+        if any(lists.get(pw_db) for pw_db in ):
+            ev["Metabolic_Pathway_DB"] = "Metabolic_DB"
+            
         if rheas := lists.get('rhea_ids'): ev["Rhea_ID"] = ";".join(rheas)
         if catalytic_gos: ev["GO_Catalytic"] = ";".join(catalytic_gos)
         
+        if cat_doms := lists.get('catalytic_domains'): ev["Catalytic_Domain"] = ";".join(cat_doms)
+        if pdb_ids := lists.get('pdb_ids'): ev["PDB_Structure"] = ";".join(pdb_ids)
+
+
         if features.get('has_active_site'): ev["Active_Site"] = "Active site annotated"
         if features.get('has_catalytic_kw'): ev["Keyword_Catalytic"] = "Catalytic keyword matched"
-        if protein_name and pt.ENZYME_NAME_ENDINGS.search(protein_name): ev["Protein_Name"] = protein_name
+        #if protein_name and pt.ENZYME_NAME_ENDINGS.search(protein_name): ev["Protein_Name"] = protein_name
+        if features.get('has_enzyme_name') and not features.get('is_regulatory'): 
+            ev["Protein_Name"] = protein_name
+
         if features.get('has_biosynth_text'): ev["Text_Mining"] = "Biosynthesis context"
 
         return list(ev.keys()), list(ev.values())
@@ -354,7 +365,25 @@ class EnzymeClassifier:
         if go_points >= 10 and kw_points >= 10:
             score += 5
         
-        if any(db in ["BRENDA", "SABIO-RK"] for db in entry_data['lists'].get('enzyme_dbs', [])): score += 30
+
+        if features.get('has_catalytic_domain', False): 
+            score += 20
+            
+        if features.get('has_pdb', False):
+            score += 10 # Base score for resolved structure
+            if features.get('has_binding_site', False) or features.get('has_active_site', False):
+                site_eco = features.get('active_site_eco_rk', 'NONE')
+                if site_eco in ["STRICT_EXP", "HTP_EXP"]:
+                    score += 20  # Massive boost for physical ligand confirmation
+                else:
+                    score += 5   # Minor boost for computational site
+
+        if any(db in ["BRENDA", "SABIO-RK"] for db in entry_data['lists'].get('enzyme_dbs', [])): 
+            score += 30
+        # Minor bonus for curated metabolic pathways
+        if any(entry_data['lists'].get(pw_db) for pw_db in ['xref_biocyc', 'xref_unipath', 'xref_kegg', 'xref_reactome']):
+            score += 10
+
         if bool(entry_data['lists'].get('rhea_ids')): score += 20
         if features.get('has_kinetics', False): score += 50
         if features.get('has_active_site', False): score += 20
@@ -366,6 +395,7 @@ class EnzymeClassifier:
         # PENALTIES
         if is_inactive: score -= 50
         if is_putative: score -= 20
+        if features.get('is_regulatory', False): score -= 20
         if pe in ['4', '5']: score -= 15 
         if is_fragment: score -= 10
 
@@ -408,7 +438,23 @@ class EnzymeClassifier:
         enz_dbs = entry_data['lists'].get('enzyme_dbs', [])
         rhea_ids = entry_data['lists'].get('rhea_ids', [])
 
-        features['has_enzyme_name'] = bool(pt.ENZYME_NAME_ENDINGS.search(protein_name))
+
+        # 1. Smart Name Logic
+        features['has_enzyme_name'] = bool(pt.EMBEDDED_ENZYME_NAME.search(protein_name))
+        features['is_regulatory'] = bool(pt.REGULATORY_PREFIX.search(protein_name))
+        #features['has_enzyme_name'] = bool(pt.ENZYME_NAME_ENDINGS.search(protein_name))
+
+        # 2. Domain Extraction
+        domain_texts = entry_data['lists'].get('domains', [])
+        catalytic_domains = [d for d in domain_texts if pt.CATALYTIC_DOMAINS.search(d)]
+        features['has_catalytic_domain'] = bool(catalytic_domains)
+        entry_data['lists']['catalytic_domains'] = catalytic_domains # Save for _gather_evidence
+        
+        # 3. Structural Flags
+        features['has_pdb'] = bool(entry_data['lists'].get('pdb_ids', []))
+        features['has_binding_site'] = bool(entry_data['lists'].get('binding_sites', []))
+
+
         features['is_inactive_text'] = bool(pt.HARD_INACTIVE_PATTERN.search(protein_name)) or "inactive" in caution_text or "catalytically dead" in caution_text
         features['is_putative'] = bool(pt.PUTATIVE_TERMS.search(protein_name))
         features['has_sec_met_text'] = bool(pt.SEC_MET_PATTERNS.search(combined_text))
@@ -485,11 +531,14 @@ class EnzymeClassifier:
             (protein_existence == '1' and features['has_active_site'])
         ])
 
+
+
         med_prob = any([
             features['has_active_site'],
             features['has_catalytic_kw'],
             features['has_biosynth_text'],
-            bool(pt.ENZYME_NAME_ENDINGS.search(protein_name)),
+            features['has_catalytic_domain'], 
+            (features['has_enzyme_name'] and not features['is_regulatory']),
             bool(catalytic_gos)
         ])
 
@@ -542,11 +591,18 @@ class EnzymeClassifier:
             "flag_has_ec": bool(ec_num),
             "flag_is_multifunctional": len(ec_num) > 1,
             "flag_is_promiscuous": any("-" in ec for ec in ec_num),
+
+            "flag_has_catalytic_domain": features['has_catalytic_domain'],
+            "flag_is_regulatory": features['is_regulatory'],
+            "flag_has_pdb": features['has_pdb'],
+
             "flag_has_active_site": features['has_active_site'],
             "flag_has_kinetics": features['has_kinetics'],
             "flag_has_reaction": features['has_reaction'],
             "flag_has_experimental": features['has_experimental_evidence'],
             "flag_has_enzyme_experimental_evidence": features['has_enzyme_experimental_evidence'],
+
+
             "flag_is_pseudo": (primary_class == "Pseudo_Enzyme"),
             "flag_is_passive_transport": features['is_passive_transport'], 
             "evidence_field": "|".join(ev_fields) if ev_fields else "None",

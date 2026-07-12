@@ -29,7 +29,13 @@ SEC_MET_PATTERNS = re.compile(
 )
 
 # Names that suggest Enzyme activity even without EC
-ENZYME_NAME_ENDINGS = re.compile(r"(ase|synthase|kinase|transferase)$", re.IGNORECASE)
+#ENZYME_NAME_ENDINGS = re.compile(r"(ase|synthase|kinase|transferase)$", re.IGNORECASE)
+# 1. Smarter Enzyme Name Scanner (Matches catalytic terms embedded anywhere)
+EMBEDDED_ENZYME_NAME = re.compile(r"\b[a-zA-Z]*(?:ase|synthase|kinase|transferase)s?\b", re.IGNORECASE)
+# 2. Regulatory / Accessory Subunit Penalties
+REGULATORY_PREFIX = re.compile(r"\b(inhibitor|regulator|repressor|activator|receptor|scaffold|chaperone|sensor|modulator|subunit)\b", re.IGNORECASE)
+# 3. Catalytic Domain Scanner (For InterPro/Pfam/SUPFAM descriptions)
+CATALYTIC_DOMAINS = re.compile(r"\b(kinase|transferase|hydrolase|lyase|isomerase|ligase|oxidoreductase|polymerase|peptidase|protease)\b", re.IGNORECASE)
 
 
 # Reaction cleaners

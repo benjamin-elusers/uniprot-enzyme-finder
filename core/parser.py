@@ -7,7 +7,7 @@ import logging
 class UniprotEntryParser:
     """
     Parses a single UniProt XML entry into a comprehensive dictionary of raw features.
-    Designed purely for ETL extraction (v22)
+    Designed purely for ETL extraction (v29)
     """
     def __init__(self, xml_str):
         self.parser = etree.XMLParser(recover=True)
@@ -139,9 +139,10 @@ class UniprotEntryParser:
 
     def _scan_references(self):
         out = {
-            'ec_db': [], 'kw_ids': [], 'kw_text': [], 'go_ids': [], 'go_text': [], 'rhea_ids': [],
+            'ec_db': [], 'kw_ids': [], 'kw_text': [], 'go_ids': [], 'go_text': [], 'rhea_ids': [],'pdb_ids': [], 'domains': []
             'enzyme_dbs': [], 'xref_ensembl': [], 'xref_af': [], 'xref_kegg': [], 
             'xref_brenda': [], 'xref_biocyc': [], 'xref_pathcom': [], 'xref_reactome': [], 'xref_string': [], 'xref_unipath': [],
+
             'db_ec_evidence_keys': ""
         }
         
@@ -169,6 +170,13 @@ class UniprotEntryParser:
 
                 out['go_ids'].append(d_id)
                 if val: out['go_text'].append(f"{d_id}|{eco_code}|{val}")   
+
+            elif d_type == "PDB":
+                out['pdb_ids'].append(d_id)
+            elif d_type in ["InterPro", "Pfam", "SUPFAM"]:
+                for prop in child.findall(f"{self.ns}property"):
+                    if prop.get('type') == 'entry name':
+                        out['domains'].append(prop.get('value'))
 
             # Other external references (xrefs)    
             elif d_type == "Ensembl": out['xref_ensembl'].append(d_id)

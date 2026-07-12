@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from core.classifier import EnzymeClassifier
-from core.models import COLUMNS, BOOL_COLS, INT_COLS, build_parquet_record, 
+from core.models import COLUMNS, BOOL_COLS, INT_COLS, build_parquet_record
 from utils.io import load_checkpoint, save_checkpoint, chunk_reader, get_estimated_total
 from utils.obo_loader import load_catalytic_go_ids, load_eco_definitions
 from utils.logger import setup_logger
