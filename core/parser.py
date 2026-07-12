@@ -139,10 +139,9 @@ class UniprotEntryParser:
 
     def _scan_references(self):
         out = {
-            'ec_db': [], 'kw_ids': [], 'kw_text': [], 'go_ids': [], 'go_text': [], 'rhea_ids': [],'pdb_ids': [], 'domains': []
+            'ec_db': [], 'kw_ids': [], 'kw_text': [], 'go_ids': [], 'go_text': [], 'rhea_ids': [],'pdb_ids': [], 'domains': [],
             'enzyme_dbs': [], 'xref_ensembl': [], 'xref_af': [], 'xref_kegg': [], 
             'xref_brenda': [], 'xref_biocyc': [], 'xref_pathcom': [], 'xref_reactome': [], 'xref_string': [], 'xref_unipath': [],
-
             'db_ec_evidence_keys': ""
         }
         
