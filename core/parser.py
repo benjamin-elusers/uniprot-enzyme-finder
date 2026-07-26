@@ -157,7 +157,11 @@ class UniprotEntryParser:
                 if child.get("evidence"): db_evs.append(child.get("evidence"))
                     
             elif d_type == "Rhea": out['rhea_ids'].append(d_id)
-            elif d_type in ["BRENDA", "SABIO-RK"]: out['enzyme_dbs'].append(d_id) 
+            elif d_type in ["BRENDA", "SABIO-RK"]: 
+                out['enzyme_dbs'].append(f"{d_type}:{d_id}")
+                if d_type == "BRENDA":
+                    out['xref_brenda'].append(d_id)
+                    out['ec_db'].append(d_id)
             elif d_type == "GO":
                 term = child.find(f"{self.ns}property[@type='term']")
                 val = term.get("value", "") if term is not None else ""
@@ -172,10 +176,13 @@ class UniprotEntryParser:
 
             elif d_type == "PDB":
                 out['pdb_ids'].append(d_id)
+            
+
             elif d_type in ["InterPro", "Pfam", "SUPFAM"]:
                 for prop in child.findall(f"{self.ns}property"):
                     if prop.get('type') == 'entry name':
-                        out['domains'].append(prop.get('value'))
+                        # Store both ID and Name
+                        out['domains'].append(f"{d_id}|{prop.get('value')}")
 
             # Other external references (xrefs)    
             elif d_type == "Ensembl": out['xref_ensembl'].append(d_id)

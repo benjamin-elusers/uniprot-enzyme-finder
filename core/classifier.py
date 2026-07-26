@@ -251,9 +251,9 @@ class EnzymeClassifier:
         if features.get('has_reaction'): ev["Reaction_Text"] = "Reaction found"
         if dbs := lists.get('enzyme_dbs'): ev["Enzyme_DB"] = ";".join(dbs)
 
-        if any(lists.get(pw_db) for pw_db in ):
+        if any(lists.get(pw_db) for pw_db in ['xref_biocyc', 'xref_unipath', 'xref_kegg', 'xref_reactome']):
             ev["Metabolic_Pathway_DB"] = "Metabolic_DB"
-            
+
         if rheas := lists.get('rhea_ids'): ev["Rhea_ID"] = ";".join(rheas)
         if catalytic_gos: ev["GO_Catalytic"] = ";".join(catalytic_gos)
         
@@ -326,21 +326,27 @@ class EnzymeClassifier:
         if med_prob: return "Suspected_Enzyme"
         return "Non_Enzyme"
 
+
     def _calculate_confidence(self, features, entry_data, is_inactive, is_putative, is_fragment, pe):
-        score = 0
+        breakdown = {
+            "Cat_Activity": 0, "EC": 0, "GO_KW": 0, "Structure": 0, 
+            "Databases": 0, "Kinetics": 0, "Protein": 0, "Misc_Exp": 0, "Penalties": 0
+        }
+
+        # --- 1. PRIMARY EXPERIMENTAL ---
         cat_act_ev = features.get('catalytic_activity_eco_rk', 'NONE')
-        if cat_act_ev == "STRICT_EXP": score += 60
-        elif cat_act_ev == "HTP_EXP": score += 40
-        elif cat_act_ev == "CURATED": score += 30
-        elif cat_act_ev == "AUTOMATED": score += 10
+        if cat_act_ev == "STRICT_EXP": breakdown["Cat_Activity"] += 60
+        elif cat_act_ev == "HTP_EXP": breakdown["Cat_Activity"] += 40
+        elif cat_act_ev == "CURATED": breakdown["Cat_Activity"] += 30
+        elif cat_act_ev == "AUTOMATED": breakdown["Cat_Activity"] += 10
 
         ec_ev = features.get('ec_eco_rk', 'NONE')
-        if ec_ev == "STRICT_EXP": score += 50
-        elif ec_ev == "HTP_EXP": score += 30
-        elif ec_ev == "CURATED": score += 20
-        elif ec_ev == "AUTOMATED": score += 10
+        if ec_ev == "STRICT_EXP": breakdown["EC"] += 50
+        elif ec_ev == "HTP_EXP": breakdown["EC"] += 30
+        elif ec_ev == "CURATED": breakdown["EC"] += 20
+        elif ec_ev == "AUTOMATED": breakdown["EC"] += 10
         
-        # 1. Calculate GO Term Points
+        # --- 2. GO TERMS & KEYWORDS ---
         go_ev = features.get('go_term_eco_rk', 'NONE')
         go_points = 0
         if go_ev == "STRICT_EXP": go_points = 40
@@ -348,7 +354,6 @@ class EnzymeClassifier:
         elif go_ev == "CURATED": go_points = 10
         elif go_ev == "AUTOMATED": go_points = 5
 
-        # 2. Calculate Keyword Points
         kw_ev = features.get('keyword_eco_rk', 'NONE')
         kw_points = 0
         if kw_ev == "STRICT_EXP": kw_points = 40
@@ -356,70 +361,77 @@ class EnzymeClassifier:
         elif kw_ev == "CURATED": kw_points = 10
         elif kw_ev == "AUTOMATED": kw_points = 5
 
-        # 3. Take the MAXIMUM of the two highly correlated features
-        score += max(go_points, kw_points)
+        # Take the MAXIMUM of the two highly correlated features
+        breakdown["GO_KW"] += max(go_points, kw_points)
 
-        # Optional: Corroboration Bonus
-        # If they BOTH have experimental/curated evidence, give a tiny flat bonus 
-        # to reward the density of the annotation without double-counting the main experiment.
+        # Corroboration Bonus
         if go_points >= 10 and kw_points >= 10:
-            score += 5
-        
+            breakdown["GO_KW"] += 5
 
+        # --- 3. STRUCTURAL BONUSES ---
         if features.get('has_catalytic_domain', False): 
-            score += 20
-            
+            breakdown["Structure"] += 20
+
         if features.get('has_pdb', False):
-            score += 10 # Base score for resolved structure
+            breakdown["Structure"] += 10
             if features.get('has_binding_site', False) or features.get('has_active_site', False):
-                site_eco = features.get('active_site_eco_rk', 'NONE')
-                if site_eco in ["STRICT_EXP", "HTP_EXP"]:
-                    score += 20  # Massive boost for physical ligand confirmation
+                act_eco = features.get('active_site_eco_rk', 'NONE')
+                bnd_eco = features.get('binding_site_eco_rk', 'NONE')
+                
+                if act_eco in ["STRICT_EXP", "HTP_EXP"] or bnd_eco in ["STRICT_EXP", "HTP_EXP"]:
+                    breakdown["Structure"] += 20
                 else:
-                    score += 5   # Minor boost for computational site
+                    breakdown["Structure"] += 5
 
-        if any(db in ["BRENDA", "SABIO-RK"] for db in entry_data['lists'].get('enzyme_dbs', [])): 
-            score += 30
-        # Minor bonus for curated metabolic pathways
+        # --- 4. DATABASE BONUSES ---
+        if any(db.startswith("BRENDA") or db.startswith("SABIO-RK") for db in entry_data['lists'].get('enzyme_dbs', [])): 
+            breakdown["Databases"] += 30
+
         if any(entry_data['lists'].get(pw_db) for pw_db in ['xref_biocyc', 'xref_unipath', 'xref_kegg', 'xref_reactome']):
-            score += 10
+            breakdown["Databases"] += 10
 
-        if bool(entry_data['lists'].get('rhea_ids')): score += 20
-        if features.get('has_kinetics', False): score += 50
-        if features.get('has_active_site', False): score += 20
-        if features.get('has_experimental_evidence', False): score += 5
+        if bool(entry_data['lists'].get('rhea_ids')): 
+            breakdown["Databases"] += 20
 
-        if pe == '1': score += 10
-        elif pe == '2': score += 5
+        # --- 5. KINETICS & EXPERIMENTAL BONUSES ---
+        if features.get('has_kinetics', False): breakdown["Kinetics"] += 50
+        if features.get('has_active_site', False): breakdown["Structure"] += 20
+        if features.get('has_experimental_evidence', False): breakdown["Misc_Exp"] += 5
 
-        # PENALTIES
-        if is_inactive: score -= 50
-        if is_putative: score -= 20
-        if features.get('is_regulatory', False): score -= 20
-        if pe in ['4', '5']: score -= 15 
-        if is_fragment: score -= 10
+        if pe == '1': breakdown["PE"] += 10
+        elif pe == '2': breakdown["PE"] += 5
 
-        # Partial EC Penalty (Averaged for promiscuous/multifunctional enzymes)
+        # --- 6. PENALTIES ---
+        if is_inactive: breakdown["Penalties"] -= 50
+        if is_putative: breakdown["Penalties"] -= 20
+        if features.get('is_regulatory', False): breakdown["Penalties"] -= 20
+        if pe in ['4', '5']: breakdown["Penalties"] -= 15
+        if is_fragment: breakdown["Penalties"] -= 10
+
+        # Partial EC Penalty
         ec_list = entry_data['lists'].get('ec_numbers', [])
         if ec_list:
             total_ec_penalty = 0
             for ec in ec_list:
                 missing_digits = ec.count("-")
-                if missing_digits == 1:
-                    total_ec_penalty += 5    # e.g., 1.1.1.-
-                elif missing_digits == 2:
-                    total_ec_penalty += 15   # e.g., 1.1.-.-
-                elif missing_digits >= 3:
-                    total_ec_penalty += 25   # e.g., 1.-.-.-
+                if missing_digits == 1: total_ec_penalty += 5
+                elif missing_digits == 2: total_ec_penalty += 15
+                elif missing_digits >= 3: total_ec_penalty += 25
             
-            # Apply the mean penalty across all functions, rounded to nearest integer
-            average_penalty = round(total_ec_penalty / len(ec_list))
-            score -= average_penalty
+            breakdown["Penalties"] -= round(total_ec_penalty / len(ec_list))
+
+        # =====================================================================
+        # MASTER SCORE CALCULATION
+        # =====================================================================
+        score = sum(breakdown.values())
 
         tier = "Unrated"
         if score >= 100: tier = "Gold"      
         elif score >= 50: tier = "Silver" 
         elif score >= 20: tier = "Bronze"    
+
+        # Inject into features to bypass return unpacking changes
+        features['confidence_breakdown'] = json.dumps(breakdown)
 
         return tier, score
 
@@ -493,10 +505,12 @@ class EnzymeClassifier:
         def get_keys_for_usage(usage_pattern):
             return [k for k, usages in evidence_usages.items() if usage_pattern.lower() in usages.lower()]
             
+
         feature_key_mappings = {
             'ec': entry_data['text'].get('name_ec_evidence_keys', '').split() + entry_data['text'].get('db_ec_evidence_keys', '').split(),
             'catalytic_activity': entry_data['text'].get('reaction_evidence_keys', '').split(),
             'active_site': get_keys_for_usage("active site"),
+            'binding_site': get_keys_for_usage("binding site"),
             'cofactor': get_keys_for_usage("cofactor"),
             'rhea_id': get_keys_for_usage("rhea"),
             'keyword': get_keys_for_usage("keyword"),
@@ -522,7 +536,9 @@ class EnzymeClassifier:
         features['has_active_site'] = bool(entry_data['lists'].get('active_sites'))
         features['has_kinetics'] = bool(entry_data['text'].get('kinetics_km') or entry_data['text'].get('kinetics_vmax') or entry_data['text'].get('kinetics_kcat'))
 
-        strict_enz_db = any(db in ["BRENDA", "SABIO-RK"] for db in enz_dbs)
+        #strict_enz_db = any(db in ["BRENDA", "SABIO-RK"] for db in enz_dbs)
+        strict_enz_db = any(db.startswith("BRENDA") or db.startswith("SABIO-RK") for db in enz_dbs)
+        
         high_prob = any([
             bool(entry_data['lists'].get('ec_numbers')),
             (features['has_reaction'] and not features['is_passive_transport']),
@@ -530,8 +546,6 @@ class EnzymeClassifier:
             (bool(rhea_ids) and not features['is_passive_transport']),
             (protein_existence == '1' and features['has_active_site'])
         ])
-
-
 
         med_prob = any([
             features['has_active_site'],
@@ -561,6 +575,8 @@ class EnzymeClassifier:
         row_metadata = {
             "confidence_tier": confidence_tier,
             "confidence_score": confidence_score,
+            "confidence_breakdown": features.get("confidence_breakdown", "{}"),
+            
             "raw_evidence_map": json.dumps(evidence_map) if evidence_map else "{}",
             "detailed_evidence_map": self._build_evidence_summary(entry_data),
             

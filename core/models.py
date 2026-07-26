@@ -9,7 +9,7 @@ COLUMNS = [
     
     # 2. Classification & Confidence
     "enzyme_type", 
-    "confidence_tier", "confidence_score", 
+    "confidence_tier", "confidence_score", "confidence_breakdown",
     
     # 3. EC & Functional Categories
     "ec", "ec_from_name", "all_ec",
@@ -23,7 +23,7 @@ COLUMNS = [
     "kinetics_text","kinetics_km", "kinetics_vmax", "kinetics_kcat",
     
     # 5. Features & Domains
-    "ft_act_site", "ft_binding", "ft_mutagenesiss",
+    "ft_act_site", "ft_binding", "ft_mutagenesis",
     "caution_activity_relevance",
     
     # 6. Comments (CC)
@@ -64,6 +64,7 @@ BOOL_COLS = {
     "flag_has_enzyme_experimental_evidence", 
     "flag_has_reaction", "flag_has_kinetics", "flag_has_active_site", 
     "flag_has_experimental", 
+    "flag_has_catalytic_domain", "flag_is_regulatory", "flag_has_pdb"     
 }
 
 INT_COLS = { "length", "confidence_score"}
@@ -95,6 +96,7 @@ def build_parquet_record(entry, feats, primary_class, conf, cat, fam, cls, comp,
         "enzyme_type": primary_class, 
         "confidence_tier": row_metadata.get("confidence_tier", "Unrated"),
         "confidence_score": int(row_metadata.get("confidence_score", 0)),
+        "confidence_breakdown": row_metadata.get("confidence_breakdown", "{}"),        
         
         "ec": ";".join(lists.get('ec_db', [])),
         "ec_from_name": ";".join(lists.get('ec_from_name', [])),
